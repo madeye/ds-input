@@ -1,0 +1,11 @@
+; dsime_tsf.def — exported entry points for the in-proc COM server DLL.
+;
+; The four standard COM self-registration / activation exports. Listed here (in
+; addition to STDAPI's dllexport) so the names are clean and undecorated in the
+; export table, which regsvr32 and the COM loader expect.
+LIBRARY dsime_tsf
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE
+    DllRegisterServer   PRIVATE
+    DllUnregisterServer PRIVATE

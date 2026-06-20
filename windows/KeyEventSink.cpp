@@ -47,7 +47,7 @@ bool CtrlOrAltDown() {
 
 // ---- ITfKeyEventSink::OnSetFocus (foreground/background) -------------------
 
-STDAPI CTextService::OnSetFocus(BOOL /*fForeground*/) {
+STDMETHODIMP CTextService::OnSetFocus(BOOL /*fForeground*/) {
     // Distinct from ITfThreadMgrEventSink::OnSetFocus; this one just tells us
     // whether our key sink is foreground. Nothing to do.
     return S_OK;
@@ -84,26 +84,26 @@ BOOL CTextService::_IsKeyEaten(ITfContext* /*pic*/, WPARAM wParam, LPARAM lParam
 
 // ---- test phase (no side effects) ------------------------------------------
 
-STDAPI CTextService::OnTestKeyDown(ITfContext* pic, WPARAM wParam, LPARAM lParam,
+STDMETHODIMP CTextService::OnTestKeyDown(ITfContext* pic, WPARAM wParam, LPARAM lParam,
                                    BOOL* pfEaten) {
     *pfEaten = _IsKeyEaten(pic, wParam, lParam);
     return S_OK;
 }
 
-STDAPI CTextService::OnTestKeyUp(ITfContext* /*pic*/, WPARAM /*wParam*/,
+STDMETHODIMP CTextService::OnTestKeyUp(ITfContext* /*pic*/, WPARAM /*wParam*/,
                                  LPARAM /*lParam*/, BOOL* pfEaten) {
     // We act on key-down only; report not-eaten so key-up flows to the app.
     *pfEaten = FALSE;
     return S_OK;
 }
 
-STDAPI CTextService::OnKeyUp(ITfContext* /*pic*/, WPARAM /*wParam*/,
+STDMETHODIMP CTextService::OnKeyUp(ITfContext* /*pic*/, WPARAM /*wParam*/,
                              LPARAM /*lParam*/, BOOL* pfEaten) {
     *pfEaten = FALSE;
     return S_OK;
 }
 
-STDAPI CTextService::OnPreservedKey(ITfContext* /*pic*/, REFGUID /*rguid*/,
+STDMETHODIMP CTextService::OnPreservedKey(ITfContext* /*pic*/, REFGUID /*rguid*/,
                                     BOOL* pfEaten) {
     *pfEaten = FALSE;
     return S_OK;
@@ -111,7 +111,7 @@ STDAPI CTextService::OnPreservedKey(ITfContext* /*pic*/, REFGUID /*rguid*/,
 
 // ---- handle phase (the real work) ------------------------------------------
 
-STDAPI CTextService::OnKeyDown(ITfContext* pic, WPARAM wParam, LPARAM lParam,
+STDMETHODIMP CTextService::OnKeyDown(ITfContext* pic, WPARAM wParam, LPARAM lParam,
                                BOOL* pfEaten) {
     if (!_IsKeyEaten(pic, wParam, lParam)) {
         *pfEaten = FALSE;
@@ -128,9 +128,9 @@ HRESULT CTextService::_HandleKey(ITfContext* pic, WPARAM wParam, LPARAM lParam,
         case VK_RETURN: {
             // Commit whatever is currently shown: the converted Chinese if a
             // conversion has landed, else the raw pinyin. Then reset.
-            std::wstring final = _showingConverted ? _displayText
-                                                   : dsime::Utf8ToUtf16(_pinyin);
-            HRESULT hr = _CommitComposition(pic, final);
+            std::wstring committed = _showingConverted ? _displayText
+                                                        : dsime::Utf8ToUtf16(_pinyin);
+            HRESULT hr = _CommitComposition(pic, committed);
             _ResetBuffer();
             return hr;
         }

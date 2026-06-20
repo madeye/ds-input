@@ -156,13 +156,13 @@ private:
 // ITfDisplayAttributeProvider on CTextService
 // ---------------------------------------------------------------------------
 
-STDAPI CTextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) {
+STDMETHODIMP CTextService::EnumDisplayAttributeInfo(IEnumTfDisplayAttributeInfo** ppEnum) {
     if (!ppEnum) return E_INVALIDARG;
     *ppEnum = new (std::nothrow) CEnumDisplayAttributeInfo();
     return *ppEnum ? S_OK : E_OUTOFMEMORY;
 }
 
-STDAPI CTextService::GetDisplayAttributeInfo(REFGUID guid,
+STDMETHODIMP CTextService::GetDisplayAttributeInfo(REFGUID guid,
                                              ITfDisplayAttributeInfo** ppInfo) {
     if (!ppInfo) return E_INVALIDARG;
     *ppInfo = nullptr;

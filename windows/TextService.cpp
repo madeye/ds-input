@@ -33,7 +33,7 @@ CTextService::~CTextService() {
 
 // ---- IUnknown --------------------------------------------------------------
 
-STDAPI CTextService::QueryInterface(REFIID riid, void** ppvObj) {
+STDMETHODIMP CTextService::QueryInterface(REFIID riid, void** ppvObj) {
     if (ppvObj == nullptr) return E_INVALIDARG;
     *ppvObj = nullptr;
 
@@ -60,11 +60,11 @@ STDAPI CTextService::QueryInterface(REFIID riid, void** ppvObj) {
     return E_NOINTERFACE;
 }
 
-STDAPI_(ULONG) CTextService::AddRef() {
+STDMETHODIMP_(ULONG) CTextService::AddRef() {
     return ::InterlockedIncrement(&_cRef);
 }
 
-STDAPI_(ULONG) CTextService::Release() {
+STDMETHODIMP_(ULONG) CTextService::Release() {
     LONG cr = ::InterlockedDecrement(&_cRef);
     if (cr == 0) {
         delete this;
@@ -74,11 +74,11 @@ STDAPI_(ULONG) CTextService::Release() {
 
 // ---- Activation ------------------------------------------------------------
 
-STDAPI CTextService::Activate(ITfThreadMgr* ptim, TfClientId tid) {
+STDMETHODIMP CTextService::Activate(ITfThreadMgr* ptim, TfClientId tid) {
     return ActivateEx(ptim, tid, 0);
 }
 
-STDAPI CTextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD /*dwFlags*/) {
+STDMETHODIMP CTextService::ActivateEx(ITfThreadMgr* ptim, TfClientId tid, DWORD /*dwFlags*/) {
     _pThreadMgr = ptim;
     _pThreadMgr->AddRef();
     _tid = tid;
@@ -121,7 +121,7 @@ fail:
     return E_FAIL;
 }
 
-STDAPI CTextService::Deactivate() {
+STDMETHODIMP CTextService::Deactivate() {
     // Tear down in reverse order of Activate. Each helper is idempotent.
     _CancelDebounce();
     _UninitLanguageBar();
@@ -165,12 +165,12 @@ STDAPI CTextService::Deactivate() {
 // We don't need most of these, but a clean composition teardown on focus change
 // avoids leaking a half-finished pre-edit into the wrong document.
 
-STDAPI CTextService::OnInitDocumentMgr(ITfDocumentMgr*)   { return S_OK; }
-STDAPI CTextService::OnUninitDocumentMgr(ITfDocumentMgr*) { return S_OK; }
-STDAPI CTextService::OnPushContext(ITfContext*)           { return S_OK; }
-STDAPI CTextService::OnPopContext(ITfContext*)            { return S_OK; }
+STDMETHODIMP CTextService::OnInitDocumentMgr(ITfDocumentMgr*)   { return S_OK; }
+STDMETHODIMP CTextService::OnUninitDocumentMgr(ITfDocumentMgr*) { return S_OK; }
+STDMETHODIMP CTextService::OnPushContext(ITfContext*)           { return S_OK; }
+STDMETHODIMP CTextService::OnPopContext(ITfContext*)            { return S_OK; }
 
-STDAPI CTextService::OnSetFocus(ITfDocumentMgr* /*pdimFocus*/,
+STDMETHODIMP CTextService::OnSetFocus(ITfDocumentMgr* /*pdimFocus*/,
                                 ITfDocumentMgr* /*pdimPrevFocus*/) {
     // Focus moved to another document. If we were composing, abandon it: cancel
     // in-flight conversion and forget our buffer. We do not try to commit into
@@ -186,8 +186,8 @@ STDAPI CTextService::OnSetFocus(ITfDocumentMgr* /*pdimFocus*/,
 
 // ---- ITfThreadFocusSink ----------------------------------------------------
 
-STDAPI CTextService::OnSetThreadFocus()  { return S_OK; }
-STDAPI CTextService::OnKillThreadFocus() {
+STDMETHODIMP CTextService::OnSetThreadFocus()  { return S_OK; }
+STDMETHODIMP CTextService::OnKillThreadFocus() {
     // Whole thread lost focus (app switch). Drop any in-flight conversion so a
     // late result doesn't pop into a background window.
     _CancelDebounce();
@@ -197,7 +197,7 @@ STDAPI CTextService::OnKillThreadFocus() {
 
 // ---- ITfCompositionSink ----------------------------------------------------
 
-STDAPI CTextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
+STDMETHODIMP CTextService::OnCompositionTerminated(TfEditCookie /*ecWrite*/,
                                              ITfComposition* pComposition) {
     // TSF (or the app) ended our composition out from under us. Release our
     // reference and reset state; do NOT issue further edits on this range.

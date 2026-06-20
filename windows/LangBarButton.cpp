@@ -15,6 +15,7 @@
 #include "Globals.h"
 #include "Guids.h"
 
+#include <ctfutb.h>   // ITfLangBarItem*, ITfMenu, TF_LANGBARITEMINFO live here
 #include <new>
 #include <shellapi.h>
 #include <strsafe.h>
