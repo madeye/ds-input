@@ -153,22 +153,31 @@ impl Session {
                 r = api::convert(&engine.client, &cfg, &pinyin) => r,
             };
 
-            // Drop the result if a newer request has since superseded us.
-            if active_gen.load(Ordering::SeqCst) != my_gen {
-                return;
-            }
-
-            let outcome = match result {
-                Ok(text) => ConvertOutcome {
-                    request_id,
-                    status: 0, // DS_OK
-                    text,
-                },
-                Err(e) => ConvertOutcome {
+            // The callback is invoked exactly once for every convert() that
+            // returned a non-zero id (frontends rely on this to balance the
+            // resources tied to `deliver`). If a newer request superseded us
+            // we still deliver, but as DS_ERR_CANCELLED so only the latest
+            // request can produce a real conversion.
+            let outcome = if active_gen.load(Ordering::SeqCst) != my_gen {
+                let e = api::ConvertError::Cancelled;
+                ConvertOutcome {
                     request_id,
                     status: e.status_code(),
                     text: e.message(),
-                },
+                }
+            } else {
+                match result {
+                    Ok(text) => ConvertOutcome {
+                        request_id,
+                        status: 0, // DS_OK
+                        text,
+                    },
+                    Err(e) => ConvertOutcome {
+                        request_id,
+                        status: e.status_code(),
+                        text: e.message(),
+                    },
+                }
             };
             deliver(outcome);
         });

@@ -254,7 +254,7 @@ final class DSInputController: IMKInputController {
             preEditText = chinese
             // Re-show the updated pre-edit in the active client.
             // We need the client object; retrieve it from IMK.
-            if let client = self.client() as? (any IMKTextInput & NSObjectProtocol) {
+            if let client = self.client() {
                 showPreEdit(chinese, client: client)
             }
         } else if status != DS_ERR_CANCELLED {

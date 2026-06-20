@@ -81,7 +81,13 @@ char      *ds_session_get_input(DsSession *session);
 
 /* Kick off async conversion of the current buffer. Cancels any previous
  * in-flight request for this session. Returns a monotonic request id, or 0 if
- * the buffer is empty (callback is not invoked in that case). */
+ * the buffer is empty (callback is not invoked in that case).
+ *
+ * EXACTLY-ONCE: for every call that returns a non-zero id, `callback` is
+ * invoked exactly once, on a worker thread. If a newer request (or a cancel /
+ * reset) supersedes this one before it finishes, the callback still fires, with
+ * status DS_ERR_CANCELLED. This lets the frontend safely tie per-request
+ * resources (e.g. a retained context pointer) to the callback. */
 uint64_t   ds_session_convert(DsSession *session,
                               DsConvertCallback callback,
                               void *user_data);

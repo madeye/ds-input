@@ -71,8 +71,13 @@ SWIFT_SOURCES=(
 
 BRIDGING_HEADER="$SOURCES_DIR/dsime_bridge.h"
 
-# macOS deployment target (minimum 13.0 to ensure IMK APIs are available)
-MACOS_TARGET="13.0"
+# macOS deployment target.  We match the SDK version to avoid linker warnings
+# about object files built for a newer OS than the deployment target.
+# 13.0 would work at runtime, but the Rust static lib is compiled against the
+# host SDK (26.x), so we set the deployment target to match.
+MACOS_TARGET="$(xcrun --sdk macosx --show-sdk-version 2>/dev/null | cut -d. -f1-2)"
+: "${MACOS_TARGET:=13.0}"
+echo "    macOS target: $MACOS_TARGET"
 
 # System frameworks needed by the Rust static archive + our own code.
 # - InputMethodKit / AppKit / Carbon: IME infrastructure
@@ -105,8 +110,8 @@ swiftc \
     -target "arm64-apple-macos${MACOS_TARGET}" \
     $SWIFT_OPT \
     -Xcc "-I$CORE_DIR/include" \
-    -L "$CORE_LIB_DIR" \
-    -ldsime \
+    -Xlinker -force_load \
+    -Xlinker "$STATIC_LIB" \
     "${EXTRA_LINK_FLAGS[@]}" \
     -o "$BINARY"
 

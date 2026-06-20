@@ -11,8 +11,8 @@ use std::net::TcpListener;
 use std::sync::mpsc::{sync_channel, SyncSender};
 
 use dsime::{
-    ds_engine_free, ds_engine_new, ds_engine_set_config_json, ds_session_convert, ds_session_free,
-    ds_session_new, ds_session_set_input, Engine, Session,
+    ds_engine_free, ds_engine_new, ds_engine_set_config_json, ds_session_cancel, ds_session_convert,
+    ds_session_free, ds_session_new, ds_session_set_input, Engine, Session,
 };
 
 /// Serve exactly one request: read the (ignored) body, reply with `body_json`.
@@ -80,6 +80,68 @@ fn convert_round_trips_through_mock_provider() {
             .expect("callback should fire");
         assert_eq!(status, 0, "expected DS_OK, got status {status}: {text}");
         assert_eq!(text, "你好世界");
+
+        ds_session_free(session);
+        ds_engine_free(engine);
+    }
+    let _ = std::fs::remove_file(&tmp);
+}
+
+/// A server that accepts the connection but never replies, so the request stays
+/// in flight until cancelled. Returns the bound port.
+fn spawn_hanging_server() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        // Hold the connection open for a while without responding.
+        if let Ok((stream, _)) = listener.accept() {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            drop(stream);
+        }
+    });
+    port
+}
+
+#[test]
+fn cancel_delivers_exactly_one_cancelled_callback() {
+    // Guarantees the EXACTLY-ONCE contract: an in-flight request that is
+    // cancelled still fires its callback (with DS_ERR_CANCELLED == 4) precisely
+    // once. Frontends rely on this to release per-request resources.
+    let port = spawn_hanging_server();
+    let tmp = std::env::temp_dir().join(format!("dsime-cancel-{}.json", std::process::id()));
+    let cpath = CString::new(tmp.to_string_lossy().as_bytes()).unwrap();
+
+    unsafe {
+        let engine = ds_engine_new(cpath.as_ptr());
+        let cfg = format!(
+            r#"{{"base_url":"http://127.0.0.1:{port}","api_key":"sk-test","model":"mock","timeout_ms":4000}}"#
+        );
+        let ccfg = CString::new(cfg).unwrap();
+        assert_eq!(ds_engine_set_config_json(engine, ccfg.as_ptr()), 0);
+
+        let session = ds_session_new(engine);
+        let input = CString::new("nihao").unwrap();
+        ds_session_set_input(session, input.as_ptr());
+
+        let (tx, rx) = sync_channel::<(i32, String)>(4);
+        let req = ds_session_convert(session, capture, &tx as *const _ as *mut c_void);
+        assert!(req > 0);
+
+        // Give the task a moment to enter its await, then cancel.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        ds_session_cancel(session);
+
+        let (status, _) = rx
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .expect("cancelled request must still fire its callback");
+        assert_eq!(status, 4, "expected DS_ERR_CANCELLED");
+
+        // And it must fire EXACTLY once — no second delivery.
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "callback must fire exactly once"
+        );
 
         ds_session_free(session);
         ds_engine_free(engine);
