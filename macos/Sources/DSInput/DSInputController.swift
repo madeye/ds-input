@@ -58,6 +58,10 @@ private func convertCallback(
 
 // MARK: - DSInputController
 
+// @objc(...) pins the Objective-C runtime name so it matches
+// InputMethodServerControllerClass in Info.plist. Without this, a Swift class's
+// runtime name is module-prefixed (DSInput.DSInputController) and IMK can't find it.
+@objc(DSInputController)
 final class DSInputController: IMKInputController {
 
     // MARK: Session

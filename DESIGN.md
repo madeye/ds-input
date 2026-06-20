@@ -56,7 +56,7 @@ Any OpenAI‑compatible endpoint works (OpenAI, Azure, OpenRouter, local Ollama/
 vLLM/LM Studio) by changing `base_url` + `model` + `api_key`.
 
 ## Config file
-`~/Library/Application Support/DSInput/config.json` (macOS) /
+`~/Library/Application Support/io.DSInput.DSInput/config.json` (macOS) /
 `%APPDATA%/DSInput/config.json` (Windows). Schema = `core::config::Config`.
 The Settings UI reads/writes it via `ds_engine_get_config_json` /
 `ds_engine_set_config_json` so there is a single source of truth.

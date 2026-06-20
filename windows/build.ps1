@@ -18,7 +18,11 @@
 [CmdletBinding()]
 param(
     [ValidateSet("Release", "Debug")]
-    [string]$Config = "Release"
+    [string]$Config = "Release",
+    # CPU architecture to build for. Defaults to the host architecture, so this
+    # works unchanged on both x64 and ARM64 Windows (e.g. Windows on ARM).
+    [ValidateSet("x64", "arm64")]
+    [string]$Arch = $(if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,7 +30,15 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Resolve-Path (Join-Path $ScriptDir "..")
 $CoreDir   = Join-Path $RepoRoot "core"
-$Target    = "x86_64-pc-windows-msvc"
+
+# Map the friendly arch name to the Rust target triple and the CMake -A value.
+if ($Arch -eq "arm64") {
+    $Target  = "aarch64-pc-windows-msvc"
+    $CmakeA  = "ARM64"
+} else {
+    $Target  = "x86_64-pc-windows-msvc"
+    $CmakeA  = "x64"
+}
 
 Write-Host "==> [1/3] Building Rust core ($Target, $Config)" -ForegroundColor Cyan
 Push-Location $CoreDir
@@ -46,11 +58,11 @@ if (-not (Test-Path (Join-Path $CoreOut "dsime.dll"))) {
 }
 Write-Host "    core artifacts in $CoreOut" -ForegroundColor DarkGray
 
-Write-Host "==> [2/3] Configuring + building C++ (CMake, VS 2022, x64)" -ForegroundColor Cyan
+Write-Host "==> [2/3] Configuring + building C++ (CMake, VS 2022, $CmakeA)" -ForegroundColor Cyan
 $BuildDir = Join-Path $ScriptDir "build"
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
-cmake -S $ScriptDir -B $BuildDir -G "Visual Studio 17 2022" -A x64 `
+cmake -S $ScriptDir -B $BuildDir -G "Visual Studio 17 2022" -A $CmakeA `
       "-DDSIME_CORE_DIR=$CoreOut"
 cmake --build $BuildDir --config $Config
 

@@ -42,7 +42,7 @@ Studio).
 
 ## Configuration
 
-Stored as JSON at `~/Library/Application Support/DSInput/config.json` (macOS) /
+Stored as JSON at `~/Library/Application Support/io.DSInput.DSInput/config.json` (macOS) /
 `%APPDATA%\DSInput\config.json` (Windows), and edited through each platform's
 Settings window (single source of truth via `ds_engine_{get,set}_config_json`):
 

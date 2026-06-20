@@ -64,6 +64,7 @@ mkdir -p "$BUILD_DIR"
 echo "==> Compiling Swift sources…"
 
 SWIFT_SOURCES=(
+    "$SOURCES_DIR/main.swift"
     "$SOURCES_DIR/AppDelegate.swift"
     "$SOURCES_DIR/DSInputController.swift"
     "$SOURCES_DIR/PreferencesWindowController.swift"

@@ -20,6 +20,22 @@
 
 import AppKit
 
+// MARK: - Test conversion callback (top-level @convention(c))
+
+/// Fired by the core on a worker thread when the Settings "Test" conversion
+/// returns. We balance the retained controller ref and hop to main for UI.
+private func testConvertCallback(
+    userData: UnsafeMutableRawPointer?,
+    requestId: UInt64,
+    status: Int32,
+    textUtf8: UnsafePointer<CChar>?
+) {
+    guard let userData = userData else { return }
+    let ctrl = Unmanaged<PreferencesWindowController>.fromOpaque(userData).takeRetainedValue()
+    let text = textUtf8 != nil ? String(cString: textUtf8!) : ""
+    DispatchQueue.main.async { ctrl.handleTestResult(status: status, text: text) }
+}
+
 // MARK: - Codable config mirror
 
 private struct DsConfig: Codable {
@@ -50,6 +66,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private var debounceField: NSTextField!
     private var systemPromptView: NSTextView!
     private var statusLabel: NSTextField!
+
+    /// Transient session used only by the "Test" button; freed when its result
+    /// arrives. nil when no test is in flight.
+    private var testSession: OpaquePointer?
 
     // MARK: - Init
 
@@ -173,6 +193,13 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         reloadBtn.bezelStyle = .rounded
         reloadBtn.frame = NSRect(x: fieldX, y: 16, width: 140, height: 28)
         contentView.addSubview(reloadBtn)
+
+        // Test: save the current fields, then run one sample conversion so the
+        // user can confirm the URL/key/model work without leaving Settings.
+        let testBtn = NSButton(title: "Test", target: self, action: #selector(testConnection))
+        testBtn.bezelStyle = .rounded
+        testBtn.frame = NSRect(x: fieldX + 150, y: 16, width: 90, height: 28)
+        contentView.addSubview(testBtn)
     }
 
     // MARK: - Window show
@@ -254,9 +281,54 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    // MARK: - Test conversion
+
+    @objc private func testConnection() {
+        // Persist what's in the form first so the engine converts with the
+        // values the user just typed.
+        save()
+        guard let engine = sharedDsEngine else {
+            statusLabel.stringValue = "Test: engine unavailable"
+            return
+        }
+        if let s = testSession { ds_session_free(s); testSession = nil }
+        guard let s = ds_session_new(engine) else {
+            statusLabel.stringValue = "Test: could not create session"
+            return
+        }
+        testSession = s
+
+        let sample = "nihaoshijie"
+        statusLabel.stringValue = "Testing “\(sample)” …"
+        sample.withCString { ds_session_set_input(s, $0) }
+
+        let retained = Unmanaged.passRetained(self).toOpaque()
+        let req = ds_session_convert(s, testConvertCallback, retained)
+        if req == 0 {
+            _ = Unmanaged<PreferencesWindowController>.fromOpaque(retained).takeRetainedValue()
+            ds_session_free(s)
+            testSession = nil
+            statusLabel.stringValue = "Test: empty input"
+        }
+    }
+
+    /// Called on the main thread by testConvertCallback.
+    func handleTestResult(status: Int32, text: String) {
+        if let s = testSession { ds_session_free(s); testSession = nil }
+        if status == DS_OK {
+            statusLabel.textColor = .systemGreen
+            statusLabel.stringValue = "✓ nihaoshijie → \(text)"
+        } else {
+            statusLabel.textColor = .systemRed
+            let detail = text.isEmpty ? String(cString: ds_last_error()) : text
+            statusLabel.stringValue = "✗ test failed (\(status)): \(detail)"
+        }
+    }
+
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
-        // Nothing needed; window is reused.
+        // Cancel/free any in-flight test session so we don't leak it.
+        if let s = testSession { ds_session_free(s); testSession = nil }
     }
 }

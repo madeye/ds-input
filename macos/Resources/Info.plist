@@ -26,7 +26,7 @@
     <string>APPL</string>
 
     <key>NSPrincipalClass</key>
-    <string>AppDelegate</string>
+    <string>NSApplication</string>
 
     <!-- Prevent a Dock icon / menubar appearance; run as a background service -->
     <key>LSUIElement</key>
@@ -62,19 +62,39 @@
     </array>
 
     <!--
-        Input mode dictionary — one mode per input style.
-        Each mode needs a unique reverse-DNS name.
+        Input mode dictionary. IMK requires the modes to live under
+        tsInputModeListKey (keyed by a unique reverse-DNS mode id), plus a
+        tsVisibleInputModeOrderedArrayKey listing which modes show in the
+        Input Sources picker. Without this nesting the mode never appears.
     -->
     <key>ComponentInputModeDict</key>
     <dict>
-        <key>tsInputMethodCharacterRepertoireKey</key>
+        <key>tsInputModeListKey</key>
+        <dict>
+            <key>io.github.madeye.dsinput.pinyin</key>
+            <dict>
+                <key>TISInputSourceID</key>
+                <string>io.github.madeye.dsinput.pinyin</string>
+                <key>TISIntendedLanguage</key>
+                <string>zh-Hans</string>
+                <key>tsInputModeAlternateMenuTitleKey</key>
+                <string>DS Input (LLM Pinyin)</string>
+                <key>tsInputModeCharacterRepertoireKey</key>
+                <array>
+                    <string>zh-Hans</string>
+                </array>
+                <key>tsInputModeIsVisibleKey</key>
+                <true/>
+                <key>tsInputModeKeyEquivalentKey</key>
+                <string></string>
+                <key>tsInputModeKeyEquivalentModifiersKey</key>
+                <integer>0</integer>
+            </dict>
+        </dict>
+        <key>tsVisibleInputModeOrderedArrayKey</key>
         <array>
-            <string>zh-Hans</string>
+            <string>io.github.madeye.dsinput.pinyin</string>
         </array>
-        <key>TISInputSourceID</key>
-        <string>io.github.madeye.dsinput.pinyin</string>
-        <key>TISIntendedLanguage</key>
-        <string>zh-Hans</string>
     </dict>
 
     <!-- Required for input methods placed in ~/Library/Input Methods/ -->
