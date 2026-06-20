@@ -1,0 +1,22 @@
+# Rust
+/core/target/
+**/*.rs.bk
+
+# macOS
+.DS_Store
+/macos/build/
+/macos/*.app/
+/macos/DerivedData/
+
+# Windows
+/windows/build/
+/windows/out/
+*.obj
+*.pdb
+*.exp
+*.ilk
+
+# Editor
+.idea/
+.vscode/
+*.swp
