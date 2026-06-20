@@ -53,19 +53,23 @@
     <string>DSInputController</string>
 
     <!--
-        Declare the Unicode character repertoires this input method supports.
-        "zh-Hans" = Simplified Chinese.
+        Declare the character repertoires this input method supports, as
+        ISO-15924 SCRIPT CODES (not BCP-47 language tags). "Hans" = Simplified
+        Han, "Latn" = Latin (the pinyin the user types). Using "zh-Hans" here is
+        invalid and prevents the input source from registering.
     -->
     <key>tsInputMethodCharacterRepertoireKey</key>
     <array>
-        <string>zh-Hans</string>
+        <string>Hans</string>
+        <string>Latn</string>
     </array>
 
     <!--
-        Input mode dictionary. IMK requires the modes to live under
-        tsInputModeListKey (keyed by a unique reverse-DNS mode id), plus a
-        tsVisibleInputModeOrderedArrayKey listing which modes show in the
-        Input Sources picker. Without this nesting the mode never appears.
+        Input mode dictionary. IMK requires the modes under tsInputModeListKey
+        (keyed by a unique reverse-DNS mode id) plus tsVisibleInputModeOrdered-
+        ArrayKey. The script keys (tsInputModeScriptKey / PrimaryInScriptKey)
+        are what file the mode under "Chinese (Simplified)" in the picker —
+        modeled on the system's own Chinese input methods.
     -->
     <key>ComponentInputModeDict</key>
     <dict>
@@ -75,20 +79,22 @@
             <dict>
                 <key>TISInputSourceID</key>
                 <string>io.github.madeye.dsinput.pinyin</string>
-                <key>TISIntendedLanguage</key>
-                <string>zh-Hans</string>
-                <key>tsInputModeAlternateMenuTitleKey</key>
-                <string>DS Input (LLM Pinyin)</string>
-                <key>tsInputModeCharacterRepertoireKey</key>
-                <array>
-                    <string>zh-Hans</string>
-                </array>
+                <key>tsInputModeScriptKey</key>
+                <string>smSimpChinese</string>
+                <key>tsInputModePrimaryInScriptKey</key>
+                <true/>
+                <key>tsInputModeDefaultStateKey</key>
+                <true/>
                 <key>tsInputModeIsVisibleKey</key>
                 <true/>
                 <key>tsInputModeKeyEquivalentKey</key>
                 <string></string>
                 <key>tsInputModeKeyEquivalentModifiersKey</key>
                 <integer>0</integer>
+                <key>tsInputModeCharacterRepertoireKey</key>
+                <array>
+                    <string>Hans</string>
+                </array>
             </dict>
         </dict>
         <key>tsVisibleInputModeOrderedArrayKey</key>
