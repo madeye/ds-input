@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+jobs:
+  core:
+    name: core (rust) — ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+      - run: cargo build --release
+
+  macos-frontend:
+    name: macOS frontend (build)
+    runs-on: macos-latest
+    needs: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Builds libdsime + the InputMethodKit app bundle.
+      - run: ./build.sh
+        working-directory: macos
+        continue-on-error: true # frontend is WIP; keep core gating strict
+
+  windows-frontend:
+    name: Windows frontend (build)
+    runs-on: windows-latest
+    needs: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      # Builds dsime.dll + the TSF text service.
+      - run: ./build.ps1
+        shell: pwsh
+        working-directory: windows
+        continue-on-error: true # frontend is WIP; keep core gating strict

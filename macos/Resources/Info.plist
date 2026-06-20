@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Standard bundle metadata -->
+    <key>CFBundleIdentifier</key>
+    <string>io.github.madeye.dsinput</string>
+
+    <key>CFBundleName</key>
+    <string>DSInput</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>DS Input</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+
+    <key>CFBundleExecutable</key>
+    <string>DSInput</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>NSPrincipalClass</key>
+    <string>AppDelegate</string>
+
+    <!-- Prevent a Dock icon / menubar appearance; run as a background service -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <key>LSBackgroundOnly</key>
+    <false/>
+
+    <!-- InputMethodKit keys -->
+
+    <!--
+        This name must match what you pass to IMKServer(name:...) in AppDelegate.
+        macOS routes composition events to the server registered under this name.
+    -->
+    <key>InputMethodConnectionName</key>
+    <string>DSInput_Connection</string>
+
+    <!--
+        The Swift class name for the IMKInputController subclass.
+        Must be the fully-qualified Swift class name (module prefix for ObjC
+        interop is the product module name, which equals the executable name).
+    -->
+    <key>InputMethodServerControllerClass</key>
+    <string>DSInputController</string>
+
+    <!--
+        Declare the Unicode character repertoires this input method supports.
+        "zh-Hans" = Simplified Chinese.
+    -->
+    <key>tsInputMethodCharacterRepertoireKey</key>
+    <array>
+        <string>zh-Hans</string>
+    </array>
+
+    <!--
+        Input mode dictionary — one mode per input style.
+        Each mode needs a unique reverse-DNS name.
+    -->
+    <key>ComponentInputModeDict</key>
+    <dict>
+        <key>tsInputMethodCharacterRepertoireKey</key>
+        <array>
+            <string>zh-Hans</string>
+        </array>
+        <key>TISInputSourceID</key>
+        <string>io.github.madeye.dsinput.pinyin</string>
+        <key>TISIntendedLanguage</key>
+        <string>zh-Hans</string>
+    </dict>
+
+    <!-- Required for input methods placed in ~/Library/Input Methods/ -->
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+</dict>
+</plist>

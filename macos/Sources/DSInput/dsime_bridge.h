@@ -8,6 +8,6 @@
 #ifndef DSIME_BRIDGE_H
 #define DSIME_BRIDGE_H
 
-#include "../../../../core/include/dsime.h"
+#include "dsime.h"
 
 #endif /* DSIME_BRIDGE_H */
