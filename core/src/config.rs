@@ -12,18 +12,18 @@ pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
 pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
 
 /// Instruction that turns a chat model into a whole-sentence pinyin converter.
+// Kept byte-stable and sent as the first (system) message on every request so it
+// forms a constant cacheable prefix — DeepSeek context caching then bills it at
+// the cache-hit rate and doesn't reprocess it on each incremental keystroke.
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
-You are a Chinese pinyin-to-text input method engine. The user message is a \
-string of toneless Hanyu Pinyin for one Chinese sentence or phrase. Syllables \
-may be run together, separated by spaces, or by apostrophes (the apostrophe \
-only marks a syllable boundary, e.g. xi'an = 西安). Convert it into the single \
-most natural, context-appropriate Chinese sentence.\n\
+Convert toneless Hanyu Pinyin to the single most natural Chinese sentence. \
+Syllables may run together, be space-separated, or apostrophe-separated (the \
+apostrophe only marks a syllable boundary, e.g. xi'an = 西安).\n\
 Rules:\n\
-- Output ONLY the Chinese result. No pinyin, no explanation, no quotes, no \
-extra whitespace, no alternatives.\n\
-- Keep Latin words, numbers, emails, URLs and code identifiers verbatim.\n\
-- Map punctuation typed in pinyin to the matching Chinese full-width \
-punctuation when the surrounding text is Chinese.\n\
+- Output ONLY the Chinese: no pinyin, explanation, quotes, extra whitespace, \
+or alternatives.\n\
+- Keep Latin words, numbers, emails, URLs, and code identifiers verbatim.\n\
+- Use full-width Chinese punctuation when the surrounding text is Chinese.\n\
 - If the input is empty or not pinyin, return it unchanged.";
 
 fn default_base_url() -> String {

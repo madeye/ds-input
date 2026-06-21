@@ -22,3 +22,4 @@
 #define IDC_CONFIG_PATH     209
 #define IDC_STATUS          210
 #define IDC_SAVE            211   // maps to IDOK in the dialog
+#define IDC_TEST            212   // runs a sample conversion against current fields

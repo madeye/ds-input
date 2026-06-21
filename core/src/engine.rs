@@ -6,6 +6,7 @@ use crate::config::Config;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::Notify;
 
@@ -68,8 +69,13 @@ impl Engine {
             .build()
             .map_err(|e| format!("failed to start runtime: {e}"))?;
 
+        // One shared, connection-pooled client. We keep idle connections warm so
+        // the rapid-fire incremental conversion requests (one per debounce as the
+        // user types) reuse the same TCP+TLS connection instead of reconnecting.
         let client = reqwest::Client::builder()
             .user_agent(concat!("dsime/", env!("CARGO_PKG_VERSION")))
+            .tcp_keepalive(Duration::from_secs(60))
+            .pool_idle_timeout(Duration::from_secs(90))
             .build()
             .map_err(|e| format!("failed to build http client: {e}"))?;
 

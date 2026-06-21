@@ -19,6 +19,7 @@
 #include <new>
 #include <shellapi.h>
 #include <strsafe.h>
+#include <olectl.h>   // CONNECT_E_ADVISELIMIT, CONNECT_E_NOCONNECTION
 
 // Menu command id for the single "Settings…" entry.
 #define DSIME_MENU_SETTINGS 1

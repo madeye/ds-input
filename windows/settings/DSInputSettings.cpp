@@ -18,6 +18,7 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <objbase.h>  // CoInitializeEx / CoUninitialize (excluded by WIN32_LEAN_AND_MEAN)
 #include <string>
 #include <cstdlib>   // strtol
 #include <cctype>    // isdigit
@@ -164,8 +165,8 @@ void LoadIntoDialog(HWND dlg) {
     SetText(dlg, IDC_CONFIG_PATH, L"Config: " + path.to_wstring());
 }
 
-// Build the JSON object from the dialog fields and persist it.
-bool SaveFromDialog(HWND dlg, std::wstring* errOut) {
+// Build the JSON config object from the current dialog fields.
+std::string BuildConfigJson(HWND dlg) {
     std::string base_url   = dsime::Utf16ToUtf8(GetText(dlg, IDC_BASE_URL));
     std::string api_key    = dsime::Utf16ToUtf8(GetText(dlg, IDC_API_KEY));
     std::string model      = dsime::Utf16ToUtf8(GetText(dlg, IDC_MODEL));
@@ -192,13 +193,132 @@ bool SaveFromDialog(HWND dlg, std::wstring* errOut) {
     json += "  \"timeout_ms\": "      + timeout    + ",\n";
     json += "  \"debounce_ms\": "     + debounce   + "\n";
     json += "}\n";
+    return json;
+}
 
+// Build the JSON from the dialog fields and persist it through the core.
+bool SaveFromDialog(HWND dlg, std::wstring* errOut) {
+    std::string json = BuildConfigJson(dlg);
     int32_t rc = g_engine.SetConfigJson(json.c_str());
     if (rc != DS_OK) {
         if (errOut) *errOut = dsime::LastError();
         return false;
     }
     return true;
+}
+
+// ---- "Test" button: sample conversion against the on-screen settings -------
+//
+// Side-effect-free: we never touch g_engine or the saved config. Instead we
+// write the current fields to a throwaway temp config file and spin up a
+// disposable engine on it, convert a fixed sample ("nihao"), and report the
+// result or the core's error. This lets the user verify base URL / key / model
+// BEFORE committing them with Save.
+
+struct TestState {
+    HANDLE       done = nullptr;
+    int32_t      status = DS_ERR_INTERNAL;
+    std::wstring text;
+};
+
+// CORE WORKER THREAD: stash the result and wake the UI thread. Signature must
+// match DsConvertCallback exactly (plain C calling convention).
+void TestConvertCb(void* user_data, uint64_t /*request_id*/, int32_t status,
+                   const char* text_utf8) {
+    TestState* st = static_cast<TestState*>(user_data);
+    st->status = status;
+    // text_utf8 carries the converted sentence on success, and the core's error
+    // detail (e.g. "network error: …", "auth error: …") on failure. Capture it
+    // either way — ds_last_error() is thread-local to this worker thread and so
+    // is unreadable from the UI thread.
+    st->text = dsime::Utf8ToUtf16(text_utf8);
+    ::SetEvent(st->done);
+}
+
+void TestConnection(HWND dlg) {
+    SetText(dlg, IDC_STATUS, L"Testing... converting \"nihao\"");
+    ::UpdateWindow(dlg);
+
+    std::string json = BuildConfigJson(dlg);
+
+    // Stage the fields in a temp config file (UTF-8, no BOM) for a throwaway
+    // engine — keeps the test from overwriting the user's saved config.
+    wchar_t tmpDir[MAX_PATH] = {};
+    wchar_t tmpFile[MAX_PATH] = {};
+    if (!::GetTempPathW(MAX_PATH, tmpDir) ||
+        !::GetTempFileNameW(tmpDir, L"dsi", 0, tmpFile)) {
+        SetText(dlg, IDC_STATUS, L"Test: could not create a temp file");
+        return;
+    }
+    {
+        HANDLE hf = ::CreateFileW(tmpFile, GENERIC_WRITE, 0, nullptr,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+        if (hf == INVALID_HANDLE_VALUE) {
+            SetText(dlg, IDC_STATUS, L"Test: could not write temp config");
+            ::DeleteFileW(tmpFile);
+            return;
+        }
+        DWORD wrote = 0;
+        ::WriteFile(hf, json.data(), static_cast<DWORD>(json.size()), &wrote, nullptr);
+        ::CloseHandle(hf);
+    }
+
+    std::wstring resultMsg;
+    {
+        dsime::Engine testEngine;
+        if (!testEngine.Create(dsime::Utf16ToUtf8(tmpFile).c_str())) {
+            resultMsg = L"Test: invalid settings - " + dsime::LastError();
+        } else {
+            dsime::Session sess;
+            if (!sess.Create(testEngine)) {
+                resultMsg = L"Test: could not create a session";
+            } else {
+                sess.SetInput("nihao");
+                TestState st;
+                st.done = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                uint64_t id = sess.Convert(&TestConvertCb, &st);
+                if (id == 0) {
+                    resultMsg = L"Test: empty input";
+                } else {
+                    // The C ABI guarantees the callback fires exactly once, so we
+                    // wait for it (pumping messages to stay responsive) and only
+                    // then tear down `st`/sess. After a soft cap we nudge with
+                    // Cancel; the (cancelled) callback still fires and ends this.
+                    DWORD start = ::GetTickCount();
+                    bool nudged = false;
+                    for (;;) {
+                        DWORD rc = ::MsgWaitForMultipleObjects(1, &st.done, FALSE,
+                                                               200, QS_ALLINPUT);
+                        if (rc == WAIT_OBJECT_0) break;
+                        if (rc == WAIT_OBJECT_0 + 1) {
+                            MSG m;
+                            while (::PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+                                ::TranslateMessage(&m);
+                                ::DispatchMessageW(&m);
+                            }
+                        }
+                        if (!nudged && ::GetTickCount() - start > 20000) {
+                            sess.Cancel();
+                            nudged = true;
+                        }
+                    }
+                    if (st.status == DS_OK) {
+                        resultMsg = L"Test OK:  nihao -> " + st.text;
+                    } else {
+                        // Prefer the per-result detail carried in the callback;
+                        // fall back to the (usually empty) thread-local error.
+                        std::wstring e = st.text;
+                        if (e.empty()) e = dsime::LastError();
+                        if (e.empty()) e = L"conversion failed";
+                        resultMsg = L"Test failed: " + e;
+                    }
+                }
+                if (st.done) ::CloseHandle(st.done);
+            }
+        }
+    }
+    ::DeleteFileW(tmpFile);
+    SetText(dlg, IDC_STATUS, resultMsg);
 }
 
 INT_PTR CALLBACK DlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM /*lParam*/) {
@@ -225,6 +345,22 @@ INT_PTR CALLBACK DlgProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM /*lParam*/) {
                         ::MessageBoxW(dlg, msgText.c_str(), L"DS Input",
                                       MB_OK | MB_ICONERROR);
                     }
+                    return TRUE;
+                }
+                case IDC_TEST: {
+                    // Disable the buttons for the duration: TestConnection pumps
+                    // messages while waiting, so without this the dialog could
+                    // re-enter (a second Test, or Cancel destroying us mid-wait).
+                    HWND bTest   = ::GetDlgItem(dlg, IDC_TEST);
+                    HWND bSave   = ::GetDlgItem(dlg, IDOK);
+                    HWND bCancel = ::GetDlgItem(dlg, IDCANCEL);
+                    ::EnableWindow(bTest, FALSE);
+                    ::EnableWindow(bSave, FALSE);
+                    ::EnableWindow(bCancel, FALSE);
+                    TestConnection(dlg);
+                    ::EnableWindow(bTest, TRUE);
+                    ::EnableWindow(bSave, TRUE);
+                    ::EnableWindow(bCancel, TRUE);
                     return TRUE;
                 }
                 case IDCANCEL:
