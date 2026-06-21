@@ -1,0 +1,33 @@
+// DSInputInstaller.rc — dialog, icon, embedded manifest, and payloads.
+#include <windows.h>
+#include "resource.h"
+
+// Elevation + visual-styles manifest (CREATEPROCESS_MANIFEST_RESOURCE_ID=1,
+// RT_MANIFEST=24).
+1 24 "installer.manifest"
+
+IDI_INSTALLER ICON "..\\dsime.ico"
+
+// ---- Embedded payloads (built by build-installer.ps1 into ..\dist\<arch>\) ---
+IDR_X64_TSF        RCDATA "..\\dist\\x64\\dsime_tsf.dll"
+IDR_X64_CORE       RCDATA "..\\dist\\x64\\dsime.dll"
+IDR_X64_SETTINGS   RCDATA "..\\dist\\x64\\DSInputSettings.exe"
+IDR_ARM64_TSF      RCDATA "..\\dist\\arm64\\dsime_tsf.dll"
+IDR_ARM64_CORE     RCDATA "..\\dist\\arm64\\dsime.dll"
+IDR_ARM64_SETTINGS RCDATA "..\\dist\\arm64\\DSInputSettings.exe"
+
+// ---- The installer window ---------------------------------------------------
+IDD_INSTALLER DIALOGEX 0, 0, 380, 220
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Install DS Input"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT   "DS Input — LLM whole-sentence pinyin input method",
+            IDC_TITLE, 16, 14, 348, 12
+    LTEXT   "", IDC_BODY, 16, 34, 348, 104
+    CONTROL "", IDC_PROGRESS, "msctls_progress32",
+            PBS_MARQUEE | WS_BORDER | NOT WS_VISIBLE, 16, 150, 348, 10
+    LTEXT   "", IDC_STATUS, 16, 166, 348, 22
+    DEFPUSHBUTTON "Install DS Input", IDOK, 250, 196, 114, 16
+    PUSHBUTTON    "Close",            IDCANCEL, 194, 196, 52, 16
+END

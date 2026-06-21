@@ -1,28 +1,29 @@
-# build.ps1 — build the DS Input Windows frontend end to end.
+# build.ps1 — build the DS Input Windows frontend for one or more architectures.
 #
-# Steps:
-#   1. Build the Rust core (dsime) for the MSVC x64 target -> dsime.dll +
-#      import lib.
-#   2. Configure + build the C++ TSF DLL and settings exe with CMake (VS 2022).
-#   3. Print the registration commands.
+# For each requested arch it:
+#   1. Builds the Rust core (dsime) for the MSVC target -> dsime.dll + import lib.
+#   2. Configures + builds the C++ TSF DLL and settings exe with CMake (VS 2022).
+#   3. Stages the trio (dsime_tsf.dll, dsime.dll, DSInputSettings.exe) under
+#      windows/dist/<arch>/ — the layout the installer bundles from.
 #
-# Run from a "x64 Native Tools Command Prompt for VS 2022" (PowerShell) so MSVC
-# + the Windows SDK are on PATH, or from any PowerShell if those are already set
-# up. Requires the Rust msvc toolchain:
-#     rustup target add x86_64-pc-windows-msvc
+# Run from a "x64 Native Tools Command Prompt for VS 2022" (PowerShell) or any
+# PowerShell where MSVC + the Windows SDK + the Rust msvc toolchain are set up.
 #
 # Usage:
-#     ./build.ps1                 # release build
-#     ./build.ps1 -Config Debug   # debug build
+#   ./build.ps1                       # build every supported arch (x64 + arm64)
+#   ./build.ps1 -Arch x64             # just one
+#   ./build.ps1 -Arch arm64 -Config Debug
+#
+# A requested arch whose Rust target or MSVC compiler is missing is skipped with
+# a warning (so an x64-only CI runner still produces the x64 build).
 
 [CmdletBinding()]
 param(
     [ValidateSet("Release", "Debug")]
     [string]$Config = "Release",
-    # CPU architecture to build for. Defaults to the host architecture, so this
-    # works unchanged on both x64 and ARM64 Windows (e.g. Windows on ARM).
-    [ValidateSet("x64", "arm64")]
-    [string]$Arch = $(if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" })
+    # "all" (default) builds x64 + arm64; or pick one.
+    [ValidateSet("all", "x64", "arm64")]
+    [string]$Arch = "all"
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,61 +31,90 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot  = Resolve-Path (Join-Path $ScriptDir "..")
 $CoreDir   = Join-Path $RepoRoot "core"
+$DistDir   = Join-Path $ScriptDir "dist"
 
-# Map the friendly arch name to the Rust target triple and the CMake -A value.
-if ($Arch -eq "arm64") {
-    $Target  = "aarch64-pc-windows-msvc"
-    $CmakeA  = "ARM64"
-} else {
-    $Target  = "x86_64-pc-windows-msvc"
-    $CmakeA  = "x64"
+# arch name -> (rust target triple, CMake -A value)
+$Arches = @{
+    "x64"   = @{ Target = "x86_64-pc-windows-msvc";  CmakeA = "x64"   }
+    "arm64" = @{ Target = "aarch64-pc-windows-msvc"; CmakeA = "ARM64" }
 }
+$Selected = if ($Arch -eq "all") { @("x64", "arm64") } else { @($Arch) }
 
-Write-Host "==> [1/3] Building Rust core ($Target, $Config)" -ForegroundColor Cyan
-Push-Location $CoreDir
-try {
-    if ($Config -eq "Release") {
-        cargo build --release --target $Target
-        $CoreOut = Join-Path $CoreDir "target/$Target/release"
-    } else {
-        cargo build --target $Target
-        $CoreOut = Join-Path $CoreDir "target/$Target/debug"
+function Test-RustTarget([string]$triple) {
+    $installed = (rustup target list --installed) 2>$null
+    if ($installed -notcontains $triple) {
+        Write-Host "    installing rust target $triple…" -ForegroundColor DarkGray
+        rustup target add $triple | Out-Null
     }
-} finally {
+    return ((rustup target list --installed) -contains $triple)
+}
+
+$built = @()
+foreach ($a in $Selected) {
+    $triple = $Arches[$a].Target
+    $cmakeA = $Arches[$a].CmakeA
+    Write-Host "==> [$a] core ($triple, $Config)" -ForegroundColor Cyan
+
+    if (-not (Test-RustTarget $triple)) {
+        Write-Warning "skipping $a — rust target $triple unavailable."
+        continue
+    }
+
+    Push-Location $CoreDir
+    try {
+        if ($Config -eq "Release") {
+            cargo build --release --target $triple
+            $CoreOut = Join-Path $CoreDir "target/$triple/release"
+        } else {
+            cargo build --target $triple
+            $CoreOut = Join-Path $CoreDir "target/$triple/debug"
+        }
+    } catch {
+        Pop-Location
+        Write-Warning "skipping $a — core build failed: $_"
+        continue
+    }
     Pop-Location
+    if (-not (Test-Path (Join-Path $CoreOut "dsime.dll"))) {
+        Write-Warning "skipping $a — core did not produce dsime.dll."
+        continue
+    }
+
+    Write-Host "==> [$a] C++ (CMake, VS 2022, $cmakeA)" -ForegroundColor Cyan
+    $BuildDir = Join-Path $ScriptDir "build/$a"
+    New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+    try {
+        cmake -S $ScriptDir -B $BuildDir -G "Visual Studio 17 2022" -A $cmakeA `
+              "-DDSIME_CORE_DIR=$CoreOut"
+        cmake --build $BuildDir --config $Config
+    } catch {
+        Write-Warning "skipping $a — CMake build failed (is the $cmakeA MSVC toolset installed?): $_"
+        continue
+    }
+
+    $OutDir = Join-Path $BuildDir $Config
+    $Stage  = Join-Path $DistDir $a
+    New-Item -ItemType Directory -Force -Path $Stage | Out-Null
+    foreach ($f in @("dsime_tsf.dll", "DSInputSettings.exe")) {
+        Copy-Item (Join-Path $OutDir $f) (Join-Path $Stage $f) -Force
+    }
+    Copy-Item (Join-Path $CoreOut "dsime.dll") (Join-Path $Stage "dsime.dll") -Force
+    Write-Host "    staged -> $Stage" -ForegroundColor DarkGray
+    $built += $a
 }
-if (-not (Test-Path (Join-Path $CoreOut "dsime.dll"))) {
-    throw "core build did not produce dsime.dll in $CoreOut"
+
+if ($built.Count -eq 0) {
+    throw "No architectures built. Check the Rust + MSVC toolchains."
 }
-Write-Host "    core artifacts in $CoreOut" -ForegroundColor DarkGray
 
-Write-Host "==> [2/3] Configuring + building C++ (CMake, VS 2022, $CmakeA)" -ForegroundColor Cyan
-$BuildDir = Join-Path $ScriptDir "build"
-New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
-
-cmake -S $ScriptDir -B $BuildDir -G "Visual Studio 17 2022" -A $CmakeA `
-      "-DDSIME_CORE_DIR=$CoreOut"
-cmake --build $BuildDir --config $Config
-
-$OutDir = Join-Path $BuildDir $Config
-Write-Host "    binaries in $OutDir" -ForegroundColor DarkGray
-
-Write-Host "==> [3/3] Registration" -ForegroundColor Cyan
-$Dll = Join-Path $OutDir "dsime_tsf.dll"
-Write-Host @"
-Build complete.
-
-To register the text service (run from an ELEVATED prompt):
-    regsvr32 "$Dll"
-
-To unregister:
-    regsvr32 /u "$Dll"
-
-Then enable it in:
-    Settings > Time & language > Language & region >
-      Chinese (Simplified) > ... > Language options >
-      Add a keyboard > "DS Input (LLM Pinyin)"
-
-Set your API key via the language-bar "Settings..." menu, which launches:
-    $(Join-Path $OutDir 'DSInputSettings.exe')
-"@ -ForegroundColor Green
+Write-Host ""
+Write-Host "Built arch(es): $($built -join ', ')" -ForegroundColor Green
+Write-Host "Staged under: $DistDir\<arch>\ (dsime_tsf.dll, dsime.dll, DSInputSettings.exe)"
+Write-Host ""
+Write-Host "To register a build manually (ELEVATED prompt, matching-arch regsvr32):" -ForegroundColor Green
+foreach ($a in $built) {
+    Write-Host "    regsvr32 `"$DistDir\$a\dsime_tsf.dll`""
+}
+Write-Host ""
+Write-Host "Or build + run the guided installer (installs the host-matching arch):"
+Write-Host "    ./installer/build-installer.ps1 ; ./installer/build/DSInputInstaller.exe"
