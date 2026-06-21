@@ -12,6 +12,8 @@
 # Windows
 /windows/build/
 /windows/out/
+/windows/dist/
+/windows/installer/build/
 *.obj
 *.pdb
 *.exp
