@@ -178,6 +178,12 @@ public:
         return CoreString(s_ ? ds_session_get_input(s_) : nullptr);
     }
 
+    // True when the current buffer is at/over the configured context-token budget;
+    // the frontend should flush (commit) and start fresh before adding more input.
+    bool ContextFull() const {
+        return s_ ? ds_session_context_full(s_) != 0 : false;
+    }
+
     // Kick off async conversion. callback fires on a CORE WORKER THREAD; it must
     // marshal to the UI thread before touching composition state. Returns a
     // monotonic request id, or 0 if the buffer is empty (no callback then).

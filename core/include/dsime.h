@@ -129,6 +129,12 @@ void       ds_session_cancel(DsSession *session);
 /* Clear the buffer and cancel in-flight work (call after commit / escape). */
 void       ds_session_reset(DsSession *session);
 
+/* Returns 1 when the current (uncommitted) buffer is at/over the configured
+ * max_context_tokens budget, else 0. The frontend should flush (commit) and
+ * start a fresh session before accepting more input so each request stays small
+ * and the cached system-prompt prefix stays effective. */
+int32_t    ds_session_context_full(DsSession *session);
+
 /* ---- Utilities ----------------------------------------------------------- */
 
 /* The configured idle debounce in milliseconds the frontend should wait after

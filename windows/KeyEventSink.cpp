@@ -224,6 +224,18 @@ HRESULT CTextService::_HandleKey(ITfContext* pic, WPARAM wParam, LPARAM lParam,
             }
             if (ascii == 0) { *pfEaten = FALSE; return S_OK; }
 
+            // Context cap: if the uncommitted buffer is already at the token
+            // budget, flush it (commit the current Chinese, else the raw pinyin)
+            // and start a fresh composition so the next request stays small. The
+            // char being typed begins the new buffer.
+            if (_HasComposition() && _session.ContextFull()) {
+                std::wstring committed = _showingConverted
+                                             ? _displayText
+                                             : dsime::Utf8ToUtf16(_pinyin);
+                _CommitComposition(pic, committed);
+                _ResetBuffer();
+            }
+
             if (!_HasComposition()) {
                 HRESULT hr = _StartComposition(pic);
                 if (FAILED(hr)) { *pfEaten = FALSE; return hr; }

@@ -156,6 +156,14 @@ final class DSInputController: IMKInputController {
     // MARK: - Key handlers
 
     private func handlePinyinChar(_ char: String, client sender: Any!) -> Bool {
+        // Context cap: if the uncommitted buffer is already at the token budget,
+        // flush it (commit the current pre-edit — Chinese if shown, else raw
+        // pinyin) and start fresh so the next request stays small. The char being
+        // typed begins the new buffer.
+        if !pinyinBuffer.isEmpty, let s = session, ds_session_context_full(s) != 0 {
+            let flush = preEditText ?? pinyinBuffer
+            if !flush.isEmpty { commit(flush, client: sender) }
+        }
         pinyinBuffer.append(char)
         updateSessionInput()
         showPreEdit(pinyinBuffer, client: sender) // show raw pinyin immediately
