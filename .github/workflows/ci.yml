@@ -29,6 +29,50 @@ jobs:
       - run: cargo test --all
       - run: cargo build --release
 
+  nvidia-smoke:
+    # Live end-to-end smoke test: convert pinyin via the NVIDIA-hosted
+    # OpenAI-compatible endpoint (beyond the offline tests/mock_server.rs test).
+    # Gated on the NVIDIA_API_KEY secret; self-skips when it is absent (e.g. on
+    # PRs from forks, which don't receive secrets).
+    name: live conversion smoke test (NVIDIA)
+    runs-on: ubuntu-latest
+    needs: core
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Convert pinyin via the NVIDIA endpoint
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "NVIDIA_API_KEY not set (e.g. a fork PR); skipping live smoke test."
+            exit 0
+          fi
+          ok=0
+          for attempt in 1 2 3; do
+            echo "attempt $attempt…"
+            out=$(DSIME_API_KEY="$NVIDIA_API_KEY" \
+                  DSIME_BASE_URL="https://integrate.api.nvidia.com/v1" \
+                  DSIME_MODEL="meta/llama-3.1-8b-instruct" \
+                  cargo run --quiet --example cli -- ni hao shi jie 2>&1) || true
+            echo "$out"
+            # Pass when the output contains non-ASCII (i.e. Chinese) bytes —
+            # locale-independent, and an error message would be ASCII-only.
+            if printf '%s' "$out" | LC_ALL=C grep -qP '[\x80-\xff]'; then ok=1; break; fi
+            sleep 3
+          done
+          if [ "$ok" != 1 ]; then
+            echo "::error::no Chinese characters in conversion output after retries"
+            exit 1
+          fi
+          echo "live NVIDIA conversion smoke test passed"
+
   macos-frontend:
     name: macOS frontend (build)
     runs-on: macos-latest
