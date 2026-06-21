@@ -1,18 +1,37 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    App Sandbox is required for macOS input methods (per the 2026 IME guidelines):
+    macOS is moving to refuse loading a non-sandboxed input method. A Developer-ID
+    (non-App-Store) sandboxed IME needs the mach-register temporary exception so
+    IMKServer can vend its connection. Xcode substitutes $(PRODUCT_BUNDLE_IDENTIFIER)
+    at sign time, so Debug (…​.debug) and Release get matching, distinct names.
+-->
 <plist version="1.0">
 <dict>
-	<!--
-	  Input methods must NOT be sandboxed: they run inside (or alongside) other
-	  applications' text input and the system input-source scanner does not
-	  surface a sandboxed IME bundle in System Settings. WeType and the built-in
-	  third-party IMEs are all unsandboxed. We ship a hardened-runtime,
-	  Developer-ID-signed, notarized bundle instead.
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
 
-	  Only the LLM network call needs an entitlement; with no sandbox the
-	  mach-register temporary exception for the IMK connection is unnecessary.
+	<!--
+	    The IMKServer mach connection. MUST equal Info.plist's
+	    InputMethodConnectionName, which is also $(PRODUCT_BUNDLE_IDENTIFIER)_Connection.
 	-->
+	<key>com.apple.security.temporary-exception.mach-register.global-name</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)_Connection</string>
+
+	<!-- The LLM conversion request (reqwest → rustls). -->
 	<key>com.apple.security.network.client</key>
 	<true/>
+
+	<!--
+	    Read/write the JSON config (core::config writes
+	    ~/Library/Application Support/io.DSInput.DSInput/config.json). Granted as a
+	    home-relative path so it works whether HOME resolves to the sandbox
+	    container or the real home.
+	-->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/Library/Application Support/io.DSInput.DSInput/</string>
+	</array>
 </dict>
 </plist>

@@ -22,9 +22,11 @@
 -->
 <plist version="1.0">
 <dict>
-    <!-- Standard bundle metadata -->
+    <!-- Standard bundle metadata. Default localization is Simplified Chinese;
+         systems in other languages fall back to the zh-Hans.lproj strings
+         (English is still provided via en.lproj). -->
     <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
+    <string>zh-Hans</string>
 
     <!--
         Derived from PRODUCT_BUNDLE_IDENTIFIER (set per-config in project.yml) so
@@ -91,12 +93,14 @@
     <!-- InputMethodKit keys -->
 
     <!--
-        Must match the name AppDelegate.swift passes to IMKServer(name:…), which
-        reads it back from this key. macOS routes composition events to the server
-        registered under this name. Reverse-DNS in the bundle-id namespace.
+        Per Apple (since 10.7) and the 2026 IME guidelines, this MUST be exactly
+        $(PRODUCT_BUNDLE_IDENTIFIER)_Connection. Xcode substitutes it at build
+        time; it must also equal the sandbox mach-register global-name in
+        DSInput.entitlements. AppDelegate.swift reads this key back for
+        IMKServer(name:…). Debug builds get …​.debug_Connection automatically.
     -->
     <key>InputMethodConnectionName</key>
-    <string>io.github.madeye.inputmethod.dsinput_Connection</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)_Connection</string>
 
     <!--
         The IMKInputController subclass. The Swift class is annotated

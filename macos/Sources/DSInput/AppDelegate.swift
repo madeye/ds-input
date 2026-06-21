@@ -46,8 +46,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let ver = String(cString: ds_version())
         NSLog("[DSInput] Core engine v\(ver) ready")
 
-        // 2. Start the IMKServer.  The connection name must match Info.plist.
-        let connectionName = Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String ?? "DSInput_Connection"
+        // 2. Start the IMKServer.  The connection name must match Info.plist's
+        // InputMethodConnectionName (= "<bundle id>_Connection") and the sandbox
+        // mach-register global-name. Fall back to the same derived value.
+        let fallbackConnection = (Bundle.main.bundleIdentifier ?? "io.github.madeye.inputmethod.dsinput") + "_Connection"
+        let connectionName = Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String ?? fallbackConnection
         imkServer = IMKServer(name: connectionName, bundleIdentifier: Bundle.main.bundleIdentifier)
         if imkServer == nil {
             NSLog("[DSInput] Fatal: IMKServer init failed for connection '\(connectionName)'")
