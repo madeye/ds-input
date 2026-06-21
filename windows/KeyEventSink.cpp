@@ -6,9 +6,13 @@
 // drives the composition (start / update / commit / cancel).
 //
 // Input alphabet (no candidate UI — the whole design): a-z and apostrophe build
-// the pinyin buffer. Space / Enter commit. Esc reverts/cancels. Backspace edits.
-// Everything else is passed through to the app, after committing any pending
-// composition so the pre-edit doesn't get stranded.
+// the pinyin buffer. Conversion is automatic (an idle debounce after the last
+// keystroke). Space does 分词: it inserts a word-boundary space into the pinyin
+// and re-converts; a DOUBLE space (two in a row) confirms/commits — falling back
+// to the raw pinyin if no conversion has landed yet, so text can always be
+// output. Enter commits immediately. Esc reverts/cancels. Backspace edits.
+// Everything else passes through to the app, after committing any pending
+// composition so the pre-edit isn't stranded.
 
 #include "TextService.h"
 #include "Globals.h"
@@ -124,10 +128,47 @@ STDMETHODIMP CTextService::OnKeyDown(ITfContext* pic, WPARAM wParam, LPARAM lPar
 HRESULT CTextService::_HandleKey(ITfContext* pic, WPARAM wParam, LPARAM lParam,
                                  BOOL* pfEaten) {
     switch (wParam) {
-        case VK_SPACE:
+        case VK_SPACE: {
+            // Space does 分词 (insert a word-boundary space and re-convert); a
+            // DOUBLE space confirms. We detect the second of two consecutive
+            // spaces by a trailing space already sitting in the buffer.
+            if (!_pinyin.empty() && _pinyin.back() == ' ') {
+                // Second consecutive space -> commit. Prefer the converted
+                // sentence; otherwise fall back to the raw pinyin (boundary
+                // spaces trimmed) so text is always output, even with no/slow
+                // conversion.
+                std::wstring committed;
+                if (_showingConverted) {
+                    committed = _displayText;
+                } else {
+                    std::string trimmed = _pinyin;
+                    while (!trimmed.empty() && trimmed.back() == ' ')
+                        trimmed.pop_back();
+                    committed = dsime::Utf8ToUtf16(trimmed);
+                }
+                HRESULT hr = _CommitComposition(pic, committed);
+                _ResetBuffer();
+                return hr;
+            }
+            // First space: append a 分词 boundary and re-arm auto-conversion.
+            // Keep showing the current conversion (if any) until the new result
+            // lands — a trailing boundary space doesn't change the sentence, and
+            // this lets a quick double-space commit the Chinese, not the pinyin.
+            _pinyin.push_back(' ');
+            _session.SetInput(_pinyin);
+            if (!_showingConverted) {
+                _displayText = dsime::Utf8ToUtf16(_pinyin);
+                HRESULT hr = _UpdateCompositionText(pic, _displayText, TRUE);
+                _ArmDebounce();
+                return hr;
+            }
+            _ArmDebounce();
+            return S_OK;
+        }
         case VK_RETURN: {
-            // Commit whatever is currently shown: the converted Chinese if a
-            // conversion has landed, else the raw pinyin. Then reset.
+            // Enter always commits whatever is currently shown: the converted
+            // Chinese if a conversion has landed, else the raw pinyin (so the user
+            // can take the letters verbatim without converting). Then reset.
             std::wstring committed = _showingConverted ? _displayText
                                                         : dsime::Utf8ToUtf16(_pinyin);
             HRESULT hr = _CommitComposition(pic, committed);
@@ -164,7 +205,7 @@ HRESULT CTextService::_HandleKey(ITfContext* pic, WPARAM wParam, LPARAM lParam,
             _showingConverted = false;
             _displayText = dsime::Utf8ToUtf16(_pinyin);
             HRESULT hr = _UpdateCompositionText(pic, _displayText, TRUE);
-            _ArmDebounce();
+            _ArmDebounce();  // re-convert after the edit
             return hr;
         }
         default: {
@@ -190,13 +231,11 @@ HRESULT CTextService::_HandleKey(ITfContext* pic, WPARAM wParam, LPARAM lParam,
             _pinyin.push_back(ascii);
             _session.SetInput(_pinyin);
 
-            // Always show the raw pinyin immediately so typing never blocks on
-            // the network. The conversion will replace it when (if) it arrives.
+            // Show the raw pinyin immediately so typing never blocks on the
+            // network; the auto-conversion replaces it when it arrives.
             _showingConverted = false;
             _displayText = dsime::Utf8ToUtf16(_pinyin);
             HRESULT hr = _UpdateCompositionText(pic, _displayText, TRUE);
-
-            // (Re)arm the idle debounce; conversion fires after the user pauses.
             _ArmDebounce();
             return hr;
         }

@@ -21,7 +21,7 @@ static const TF_DISPLAYATTRIBUTE kComposingAttr = {
     { TF_CT_NONE, 0 },                 // background color: none
     TF_LS_SOLID,                        // line style: solid underline
     FALSE,                              // not bold underline
-    { TF_CT_COLOR, RGB(0x33, 0x66, 0xCC) },  // underline color: blue-ish
+    { TF_CT_COLORREF, RGB(0x33, 0x66, 0xCC) },  // underline color: blue-ish
     TF_ATTR_INPUT                       // semantic: input (composing) text
 };
 

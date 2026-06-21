@@ -348,6 +348,20 @@ LRESULT CALLBACK CTextService::_MsgWndProc(HWND hWnd, UINT msg,
         }
         return 0;
     }
+    if (msg == WM_DSIME_CONVERT_PARTIAL) {
+        // A streamed partial (cumulative) update. Same STA-thread handling as a
+        // result, but the payload carries NO ref — just free it after applying.
+        ConvertResult* r = reinterpret_cast<ConvertResult*>(lParam);
+        if (r) {
+            CTextService* self =
+                reinterpret_cast<CTextService*>(::GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+            if (self) {
+                self->_OnConvertResultOnStaThread(r->request_id, r->status, r->text);
+            }
+            delete r;  // no ref to release for partials
+        }
+        return 0;
+    }
     if (msg == WM_DSIME_DEBOUNCE_FIRE) {
         CTextService* self =
             reinterpret_cast<CTextService*>(::GetWindowLongPtrW(hWnd, GWLP_USERDATA));

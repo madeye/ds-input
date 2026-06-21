@@ -155,12 +155,16 @@ void CTextService::_FireConversion() {
     _session.SetInput(_pinyin);
 
     // We hand a borrowed `this` to the worker thread via the callback's
-    // user_data. To keep `this` alive until the result is delivered (and the
-    // posted message processed), take a reference now; the message handler
-    // releases it.
+    // user_data. To keep `this` alive until the TERMINAL result is delivered
+    // (and its posted message processed), take one reference now; the terminal
+    // (is_final=1) stream callback releases it. Partial updates do not.
     AddRef();
 
-    uint64_t reqId = _session.Convert(&CTextService::_ConvertCallbackThunk, this);
+    // Stream the conversion so the pre-edit fills in incrementally (lower
+    // perceived latency). Honors the `stream` config flag: when false the core
+    // fires only the single terminal call. Reuses the engine's pooled, keep-alive
+    // connection and DeepSeek's cached system-prompt prefix across keystrokes.
+    uint64_t reqId = _session.ConvertStream(&CTextService::_StreamCallbackThunk, this);
     if (reqId == 0) {
         // Empty buffer per the core (shouldn't happen given the check above):
         // no callback will fire, so release the ref we just took.
@@ -200,6 +204,42 @@ void CTextService::_ConvertCallbackThunk(void* user_data, uint64_t request_id,
         delete r;
     }
     // On success, ownership of `r` (and the ref) passes to the window proc.
+}
+
+// ---- streaming conversion: core callback (WORKER THREAD) --------------------
+
+void CTextService::_StreamCallbackThunk(void* user_data, uint64_t request_id,
+                                        int32_t status, int32_t is_final,
+                                        const char* text_utf8) {
+    // CORE WORKER THREAD. Package the update and PostMessage it to the STA window.
+    // PARTIALS (is_final==0) carry NO ref and post WM_DSIME_CONVERT_PARTIAL; only
+    // the TERMINAL call (is_final==1) carries the per-request ref and posts
+    // WM_DSIME_CONVERT_RESULT (whose handler releases it). Partials are always
+    // queued before the terminal call from this one worker task, so FIFO delivery
+    // keeps `this` alive while partials are processed.
+    CTextService* self = static_cast<CTextService*>(user_data);
+    if (self == nullptr) return;
+
+    ConvertResult* r = new (std::nothrow) ConvertResult();
+    if (r == nullptr) {
+        // Can't deliver. Only the terminal call owns the ref, so release it then.
+        if (is_final) self->Release();
+        return;
+    }
+    r->pThis = is_final ? self : nullptr;   // ref ownership only on the terminal call
+    r->request_id = request_id;
+    r->status = status;
+    r->text = (status == DS_OK) ? dsime::Utf8ToUtf16(text_utf8) : std::wstring();
+
+    HWND wnd = self->_msgWnd;
+    UINT msg = is_final ? WM_DSIME_CONVERT_RESULT : WM_DSIME_CONVERT_PARTIAL;
+    if (wnd == nullptr ||
+        !::PostMessageW(wnd, msg, 0, reinterpret_cast<LPARAM>(r))) {
+        if (is_final) self->Release();
+        delete r;
+    }
+    // On success, ownership of `r` (and, for the terminal call, the ref) passes
+    // to the window proc.
 }
 
 // ---- conversion: result handling (STA thread) ------------------------------

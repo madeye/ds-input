@@ -185,6 +185,14 @@ public:
         return s_ ? ds_session_convert(s_, callback, user_data) : 0;
     }
 
+    // Like Convert, but streams: callback fires with is_final=0 for each partial
+    // (cumulative) update, then exactly once with is_final=1 for the terminal
+    // outcome. Honors the `stream` config flag. Returns a request id, or 0 if the
+    // buffer is empty (then no callback fires).
+    uint64_t ConvertStream(DsStreamCallback callback, void* user_data) {
+        return s_ ? ds_session_convert_stream(s_, callback, user_data) : 0;
+    }
+
     void Cancel() { if (s_) ds_session_cancel(s_); }
     void Reset()  { if (s_) ds_session_reset(s_); }
 

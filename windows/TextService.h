@@ -46,10 +46,14 @@
 #include "DsimeCore.h"
 
 // Window message we post from the core worker thread to the STA thread to
-// deliver a finished conversion. wParam/lParam carry a heap ConvertResult*.
+// deliver a finished conversion. lParam owns a heap ConvertResult* and carries
+// the per-request ref taken in _FireConversion (the proc releases it).
 #define WM_DSIME_CONVERT_RESULT  (WM_USER + 0x100)
 // Posted by the debounce timer to fire conversion on the STA thread.
 #define WM_DSIME_DEBOUNCE_FIRE   (WM_USER + 0x101)
+// A streamed PARTIAL update (cumulative text). lParam owns a heap ConvertResult*
+// but does NOT carry the per-request ref — only the terminal RESULT does.
+#define WM_DSIME_CONVERT_PARTIAL (WM_USER + 0x102)
 
 class CTextService final : public ITfTextInputProcessorEx,
                            public ITfThreadMgrEventSink,
@@ -140,9 +144,14 @@ private:
     static VOID CALLBACK _DebounceTimerCallback(PTP_CALLBACK_INSTANCE, PVOID ctx, PTP_TIMER);
 
     // ---- conversion plumbing (Composition.cpp) ----
-    void _FireConversion();  // STA thread: snapshot buffer + ds_session_convert
+    void _FireConversion();  // STA thread: snapshot buffer + ds_session_convert_stream
     static void _ConvertCallbackThunk(void* user_data, uint64_t request_id,
                                       int32_t status, const char* text_utf8);
+    // Streaming thunk (CORE WORKER THREAD): posts partials as WM_DSIME_CONVERT_PARTIAL
+    // and the terminal outcome as WM_DSIME_CONVERT_RESULT (which carries the ref).
+    static void _StreamCallbackThunk(void* user_data, uint64_t request_id,
+                                     int32_t status, int32_t is_final,
+                                     const char* text_utf8);
     void _OnConvertResultOnStaThread(uint64_t request_id, int32_t status,
                                      const std::wstring& text);
 
