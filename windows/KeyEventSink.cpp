@@ -47,6 +47,24 @@ bool CtrlOrAltDown() {
            (::GetKeyState(VK_MENU) & 0x8000);
 }
 
+// Map an ASCII punctuation char to its full-width (全角) equivalent, or 0 if it
+// isn't one we remap. \uXXXX escapes keep this independent of the source-file
+// encoding (the MSVC build doesn't pass /utf-8).
+wchar_t FullWidthPunct(wchar_t ch) {
+    switch (ch) {
+        case L',':  return 0xFF0C;  // ，
+        case L'.':  return 0x3002;  // 。
+        case L'?':  return 0xFF1F;  // ？
+        case L'!':  return 0xFF01;  // ！
+        case L';':  return 0xFF1B;  // ；
+        case L':':  return 0xFF1A;  // ：
+        case L'(':  return 0xFF08;  // （
+        case L')':  return 0xFF09;  // ）
+        case L'\\': return 0x3001;  // 、
+        default:    return 0;
+    }
+}
+
 }  // namespace
 
 // ---- ITfKeyEventSink::OnSetFocus (foreground/background) -------------------
@@ -83,6 +101,8 @@ BOOL CTextService::_IsKeyEaten(ITfContext* /*pic*/, WPARAM wParam, LPARAM lParam
         // buffer stays coherent; simplest rule: eat any bare a-z / apostrophe.
         return TRUE;
     }
+    // Punctuation we remap to full-width (全角) is eaten whenever the IME is on.
+    if (FullWidthPunct(ch) != 0) return TRUE;
     return FALSE;
 }
 
@@ -209,9 +229,31 @@ HRESULT CTextService::_HandleKey(ITfContext* pic, WPARAM wParam, LPARAM lParam,
             return hr;
         }
         default: {
+            wchar_t ch = VkToChar(wParam, lParam);
+
+            // Full-width punctuation (全角): a punctuation key commits whatever is
+            // composing (with the symbol appended), or inserts the symbol on its
+            // own when idle. The conversion is deterministic and local.
+            if (wchar_t full = FullWidthPunct(ch)) {
+                std::wstring tail(1, full);
+                if (_HasComposition()) {
+                    std::string py = _pinyin;
+                    while (!py.empty() && py.back() == ' ') py.pop_back();
+                    std::wstring base = _showingConverted ? _displayText
+                                                          : dsime::Utf8ToUtf16(py);
+                    HRESULT hr = _CommitComposition(pic, base + tail);
+                    _ResetBuffer();
+                    return hr;
+                }
+                HRESULT hr = _StartComposition(pic);
+                if (FAILED(hr)) { *pfEaten = FALSE; return hr; }
+                hr = _CommitComposition(pic, tail);
+                _ResetBuffer();
+                return hr;
+            }
+
             // A pinyin-building character. Append the produced char (lower-cased
             // letter or apostrophe) to the buffer.
-            wchar_t ch = VkToChar(wParam, lParam);
             char ascii = 0;
             if (ch >= L'A' && ch <= L'Z') ascii = static_cast<char>(ch - L'A' + 'a');
             else if (ch >= L'a' && ch <= L'z') ascii = static_cast<char>(ch);

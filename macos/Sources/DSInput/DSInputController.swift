@@ -143,10 +143,15 @@ final class DSInputController: IMKInputController {
             return handleEscape(client: sender)
 
         default:
-            // Accept printable ASCII pinyin input: a–z and apostrophe.
-            if let scalar = chars.unicodeScalars.first,
-               (scalar.value >= 0x61 && scalar.value <= 0x7A) || scalar == "'" {
-                return handlePinyinChar(String(scalar), client: sender)
+            if let scalar = chars.unicodeScalars.first {
+                // Accept printable ASCII pinyin input: a–z and apostrophe.
+                if (scalar.value >= 0x61 && scalar.value <= 0x7A) || scalar == "'" {
+                    return handlePinyinChar(String(scalar), client: sender)
+                }
+                // Full-width punctuation (全角): emit the mapped symbol.
+                if let full = Self.fullWidthPunct(scalar) {
+                    return handlePunctuation(full, client: sender)
+                }
             }
             // Any other key: commit if composing, then let the keystroke through.
             return commitAndPassThrough(event: event, client: sender)
@@ -169,6 +174,34 @@ final class DSInputController: IMKInputController {
         showPreEdit(pinyinBuffer, client: sender) // show raw pinyin immediately
         scheduleDebounce(client: sender)
         return true
+    }
+
+    private func handlePunctuation(_ full: String, client sender: Any!) -> Bool {
+        // Output the full-width (全角) symbol. If composing, commit the current
+        // pre-edit first with the symbol appended so the Chinese sentence and its
+        // punctuation land together; otherwise insert the symbol directly.
+        if let text = preEditText, !text.isEmpty {
+            commit(text + full, client: sender)
+        } else if let client = sender as? (any IMKTextInput & NSObjectProtocol) {
+            client.insertText(full, replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        return true
+    }
+
+    /// Map an ASCII punctuation scalar to its full-width (全角) equivalent, or nil.
+    private static func fullWidthPunct(_ s: Unicode.Scalar) -> String? {
+        switch s.value {
+        case 0x2C: return "，"  // ,
+        case 0x2E: return "。"  // .
+        case 0x3F: return "？"  // ?
+        case 0x21: return "！"  // !
+        case 0x3B: return "；"  // ;
+        case 0x3A: return "："  // :
+        case 0x28: return "（"  // (
+        case 0x29: return "）"  // )
+        case 0x5C: return "、"  // backslash
+        default: return nil
+        }
     }
 
     private func handleBackspace(client sender: Any!) -> Bool {
