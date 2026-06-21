@@ -50,6 +50,9 @@ fn default_debounce_ms() -> u32 {
 fn default_stream() -> bool {
     true
 }
+fn default_max_context_tokens() -> u32 {
+    1000
+}
 
 /// The full, serializable user configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +85,12 @@ pub struct Config {
     /// Lower perceived latency; disable for a single final delivery.
     #[serde(default = "default_stream")]
     pub stream: bool,
+    /// Soft cap on the per-request chat-context size (system prompt + pinyin), in
+    /// estimated tokens. When the uncommitted buffer would push a request past
+    /// this, the frontend flushes (commits) and starts a fresh session so each
+    /// request stays small and cache-friendly. See `Session::context_full`.
+    #[serde(default = "default_max_context_tokens")]
+    pub max_context_tokens: u32,
 }
 
 impl Default for Config {
@@ -96,6 +105,7 @@ impl Default for Config {
             timeout_ms: default_timeout_ms(),
             debounce_ms: default_debounce_ms(),
             stream: default_stream(),
+            max_context_tokens: default_max_context_tokens(),
         }
     }
 }

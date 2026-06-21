@@ -150,6 +150,25 @@ impl Session {
         self.buffer.lock().unwrap().clone()
     }
 
+    /// Conservative estimate of the chat-context token count for the current
+    /// buffer ([system prompt] + [pinyin]). No tokenizer dependency: ~2 chars per
+    /// token, which over-estimates for ordinary English/pinyin so the budget
+    /// check errs toward flushing a little early rather than overshooting.
+    pub fn context_tokens(&self) -> u32 {
+        let cfg = self.engine.config_snapshot();
+        let chars = cfg.system_prompt.chars().count() + self.buffer.lock().unwrap().chars().count();
+        // ceil(chars / 2) + a little overhead for role/message framing.
+        ((chars as u64).div_ceil(2) + 8).min(u32::MAX as u64) as u32
+    }
+
+    /// True when the current context is at/over the configured `max_context_tokens`
+    /// budget. The frontend should flush (commit) the composition and start a
+    /// fresh session before accepting more input, keeping each request small and
+    /// the cached prefix effective.
+    pub fn context_full(&self) -> bool {
+        self.context_tokens() >= self.engine.config_snapshot().max_context_tokens
+    }
+
     pub fn reset(&self) {
         self.cancel_inflight();
         self.buffer.lock().unwrap().clear();

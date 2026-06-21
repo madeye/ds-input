@@ -293,6 +293,20 @@ pub unsafe extern "C" fn ds_session_reset(session: *mut Session) {
     }
 }
 
+/// Returns 1 when the current (uncommitted) buffer is at/over the configured
+/// `max_context_tokens` budget, else 0. The frontend should flush (commit) and
+/// start a fresh session before accepting more input so requests stay small.
+///
+/// # Safety
+/// `session` is a valid pointer from `ds_session_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ds_session_context_full(session: *mut Session) -> i32 {
+    match session_ref(session) {
+        Some(s) if s.context_full() => 1,
+        _ => 0,
+    }
+}
+
 // ---- Utilities -------------------------------------------------------------
 
 /// # Safety
