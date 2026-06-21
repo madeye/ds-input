@@ -1,0 +1,104 @@
+name: DSInput
+
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "13.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    CLANG_ENABLE_MODULES: YES
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: YES
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ONLY_ACTIVE_ARCH: YES
+    SDKROOT: macosx
+    SWIFT_VERSION: "5.0"
+
+targets:
+  DSInput:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources/DSInput
+      - path: Resources
+        excludes:
+          - Info.plist
+    # NOTE: no `info:` block on purpose. Resources/Info.plist is the single,
+    # hand-maintained source of truth. XcodeGen must NOT regenerate it from
+    # properties here; INFOPLIST_FILE below points Xcode at the file, and Xcode
+    # still expands the $(PRODUCT_BUNDLE_IDENTIFIER) token in it (Debug → .debug).
+    settings:
+      base:
+        ARCHS: arm64
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_ENTITLEMENTS: DSInput.entitlements
+        # Distribution builds must NOT carry com.apple.security.get-task-allow
+        # (the debug "allow debugger to attach" entitlement) — notarization
+        # rejects it. Xcode injects it by default; disable that here.
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        # Bridging header exposes the core C ABI (dsime.h) to Swift.
+        SWIFT_OBJC_BRIDGING_HEADER: "$(SRCROOT)/Sources/DSInput/dsime_bridge.h"
+        HEADER_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/../core/include"
+        INFOPLIST_FILE: Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.madeye.inputmethod.dsinput
+        PRODUCT_NAME: DSInput
+        OTHER_LDFLAGS:
+          - -force_load
+          - "$(PROJECT_DIR)/../core/target/$(CARGO_PROFILE)/libdsime.a"
+          - -lc++
+          - -liconv
+          - -lresolv
+      configs:
+        Debug:
+          CARGO_PROFILE: debug
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          # Distinct id for IDE builds: an ad-hoc Xcode/DerivedData bundle with the
+          # production id would be indexed by LaunchServices and could win id
+          # resolution for io.github.madeye.inputmethod.dsinput, shadowing the installed,
+          # notarized bundle so it never surfaces in System Settings. Release /
+          # Archive (what we ship) keep the base id.
+          PRODUCT_BUNDLE_IDENTIFIER: io.github.madeye.inputmethod.dsinput.debug
+        Release:
+          CARGO_PROFILE: release
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+    dependencies:
+      - sdk: AppKit.framework
+      - sdk: Carbon.framework
+      - sdk: CFNetwork.framework
+      - sdk: CoreFoundation.framework
+      - sdk: InputMethodKit.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+    preBuildScripts:
+      - name: Build Rust Core
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+          if [[ "${CONFIGURATION}" == "Release" ]]; then
+            CARGO_PROFILE="release"
+          else
+            CARGO_PROFILE="dev"
+          fi
+
+          cargo build --manifest-path "$PROJECT_DIR/../core/Cargo.toml" --profile "$CARGO_PROFILE"
+
+schemes:
+  DSInput:
+    build:
+      targets:
+        DSInput: all
+    run:
+      config: Debug
+    archive:
+      config: Release

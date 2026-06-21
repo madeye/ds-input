@@ -16,6 +16,37 @@ pub struct ConvertOutcome {
     pub text: String,
 }
 
+/// Build the terminal outcome, honouring supersession: if a newer request has
+/// claimed the session (generation moved past `my_gen`), report DS_ERR_CANCELLED
+/// regardless of how this request actually finished.
+fn finalize(
+    active_gen: &AtomicU64,
+    my_gen: u64,
+    request_id: u64,
+    result: Result<String, api::ConvertError>,
+) -> ConvertOutcome {
+    if active_gen.load(Ordering::SeqCst) != my_gen {
+        let e = api::ConvertError::Cancelled;
+        return ConvertOutcome {
+            request_id,
+            status: e.status_code(),
+            text: e.message(),
+        };
+    }
+    match result {
+        Ok(text) => ConvertOutcome {
+            request_id,
+            status: 0, // DS_OK
+            text,
+        },
+        Err(e) => ConvertOutcome {
+            request_id,
+            status: e.status_code(),
+            text: e.message(),
+        },
+    }
+}
+
 /// Shared, thread-safe engine state. One per process is typical; cheap to share
 /// across sessions via `Arc`.
 pub struct Engine {
@@ -152,34 +183,67 @@ impl Session {
                 _ = cancel.notified() => Err(api::ConvertError::Cancelled),
                 r = api::convert(&engine.client, &cfg, &pinyin) => r,
             };
-
             // The callback is invoked exactly once for every convert() that
             // returned a non-zero id (frontends rely on this to balance the
-            // resources tied to `deliver`). If a newer request superseded us
-            // we still deliver, but as DS_ERR_CANCELLED so only the latest
-            // request can produce a real conversion.
-            let outcome = if active_gen.load(Ordering::SeqCst) != my_gen {
-                let e = api::ConvertError::Cancelled;
-                ConvertOutcome {
-                    request_id,
-                    status: e.status_code(),
-                    text: e.message(),
+            // resources tied to `deliver`).
+            deliver(finalize(&active_gen, my_gen, request_id, result));
+        });
+
+        request_id
+    }
+
+    /// Like [`Session::convert`], but streams the conversion (SSE) when the
+    /// config enables it. `on_partial` is invoked zero-or-more times with the
+    /// cumulative text as it arrives, then `deliver` is invoked exactly once
+    /// with the terminal outcome (final text, error, or DS_ERR_CANCELLED).
+    ///
+    /// `on_partial` calls are best-effort: they only fire while this request is
+    /// still the active generation, and never after `deliver`. Frontends should
+    /// tie per-request resource ownership to `deliver`, not to `on_partial`.
+    pub fn convert_stream<P, F>(&self, on_partial: P, deliver: F) -> u64
+    where
+        P: Fn(u64, &str) + Send + 'static,
+        F: FnOnce(ConvertOutcome) + Send + 'static,
+    {
+        let pinyin = self.get_input();
+        if pinyin.trim().is_empty() {
+            return 0;
+        }
+
+        let my_gen = self.active_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        self.cancel.notify_waiters();
+
+        let request_id = self.req_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        let engine = self.engine.clone();
+        let active_gen = self.active_gen.clone();
+        let cancel = self.cancel.clone();
+        let cfg = engine.config_snapshot();
+        let handle = engine.rt.handle().clone();
+
+        handle.spawn(async move {
+            let result = if cfg.stream {
+                let active_gen_p = active_gen.clone();
+                // `move` so the spawned future owns `on_partial` (needs only
+                // Send, not Sync). Drop partials from a superseded generation so
+                // a stale stream can't overwrite a newer request's pre-edit.
+                let on_delta = move |cumulative: &str| {
+                    if active_gen_p.load(Ordering::SeqCst) == my_gen {
+                        on_partial(request_id, cumulative);
+                    }
+                };
+                tokio::select! {
+                    biased;
+                    _ = cancel.notified() => Err(api::ConvertError::Cancelled),
+                    r = api::convert_stream(&engine.client, &cfg, &pinyin, on_delta) => r,
                 }
             } else {
-                match result {
-                    Ok(text) => ConvertOutcome {
-                        request_id,
-                        status: 0, // DS_OK
-                        text,
-                    },
-                    Err(e) => ConvertOutcome {
-                        request_id,
-                        status: e.status_code(),
-                        text: e.message(),
-                    },
+                tokio::select! {
+                    biased;
+                    _ = cancel.notified() => Err(api::ConvertError::Cancelled),
+                    r = api::convert(&engine.client, &cfg, &pinyin) => r,
                 }
             };
-            deliver(outcome);
+            deliver(finalize(&active_gen, my_gen, request_id, result));
         });
 
         request_id

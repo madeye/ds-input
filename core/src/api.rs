@@ -67,6 +67,25 @@ struct ChoiceMessage {
     content: String,
 }
 
+/// One SSE chunk of a streamed completion: `{"choices":[{"delta":{"content":"…"}}]}`.
+#[derive(Deserialize)]
+struct StreamChunk {
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: StreamDelta,
+}
+
+#[derive(Deserialize, Default)]
+struct StreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct ApiErrorEnvelope {
     error: ApiErrorBody,
@@ -144,6 +163,110 @@ pub async fn convert(
         .ok_or_else(|| ConvertError::Api("empty choices".to_string()))?;
 
     Ok(sanitize(&content))
+}
+
+/// Stream a conversion (SSE, `stream: true`). `on_delta` is called with the
+/// *cumulative* text each time the model emits more, so the frontend can replace
+/// the pre-edit incrementally. Returns the final sanitized text. The cumulative
+/// text passed to `on_delta` is raw (not sanitized) so partial quotes/whitespace
+/// may appear; only the returned final value is sanitized.
+pub async fn convert_stream<F>(
+    client: &reqwest::Client,
+    cfg: &Config,
+    pinyin: &str,
+    mut on_delta: F,
+) -> Result<String, ConvertError>
+where
+    F: FnMut(&str),
+{
+    if cfg.api_key.trim().is_empty() {
+        return Err(ConvertError::Config(
+            "API key is not set — open Settings and add your key".to_string(),
+        ));
+    }
+
+    let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let body = ChatRequest {
+        model: &cfg.model,
+        messages: vec![
+            ChatMessage {
+                role: "system",
+                content: &cfg.system_prompt,
+            },
+            ChatMessage {
+                role: "user",
+                content: pinyin,
+            },
+        ],
+        temperature: cfg.temperature,
+        max_tokens: cfg.max_tokens,
+        stream: true,
+    };
+
+    let mut resp = client
+        .post(&url)
+        .bearer_auth(&cfg.api_key)
+        .timeout(Duration::from_millis(cfg.timeout_ms))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ConvertError::Network(e.to_string()))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        // Errors come back as a normal JSON body, not an SSE stream.
+        let text = resp.text().await.unwrap_or_default();
+        let detail = serde_json::from_str::<ApiErrorEnvelope>(&text)
+            .map(|e| e.error.message)
+            .unwrap_or_else(|_| text.chars().take(300).collect());
+        return Err(match status.as_u16() {
+            401 | 403 => ConvertError::Auth(detail),
+            _ => ConvertError::Api(format!("HTTP {}: {}", status.as_u16(), detail)),
+        });
+    }
+
+    // Parse the SSE stream line by line. We buffer raw bytes and only decode
+    // complete lines (split on '\n') so a multi-byte UTF-8 char straddling a
+    // chunk boundary is never decoded mid-sequence.
+    let mut buf: Vec<u8> = Vec::new();
+    let mut acc = String::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|e| ConvertError::Network(e.to_string()))?
+    {
+        buf.extend_from_slice(&chunk);
+        while let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=pos).collect();
+            let line = String::from_utf8_lossy(&line);
+            let line = line.trim();
+            let Some(payload) = line.strip_prefix("data:") else {
+                continue; // comments / blank lines / other SSE fields
+            };
+            let payload = payload.trim();
+            if payload.is_empty() {
+                continue;
+            }
+            if payload == "[DONE]" {
+                return Ok(sanitize(&acc));
+            }
+            if let Ok(parsed) = serde_json::from_str::<StreamChunk>(payload) {
+                if let Some(piece) = parsed
+                    .choices
+                    .into_iter()
+                    .next()
+                    .and_then(|c| c.delta.content)
+                {
+                    if !piece.is_empty() {
+                        acc.push_str(&piece);
+                        on_delta(&acc);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(sanitize(&acc))
 }
 
 /// Models sometimes wrap output in quotes or trailing whitespace; strip that so

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Input methods must NOT be sandboxed: they run inside (or alongside) other
+	  applications' text input and the system input-source scanner does not
+	  surface a sandboxed IME bundle in System Settings. WeType and the built-in
+	  third-party IMEs are all unsandboxed. We ship a hardened-runtime,
+	  Developer-ID-signed, notarized bundle instead.
+
+	  Only the LLM network call needs an entitlement; with no sandbox the
+	  mach-register temporary exception for the IMK connection is unnecessary.
+	-->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

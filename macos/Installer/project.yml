@@ -1,0 +1,56 @@
+name: DSInputInstaller
+
+options:
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "13.0"
+
+configs:
+  Debug: debug
+  Release: release
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: YES
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ONLY_ACTIVE_ARCH: YES
+    SDKROOT: macosx
+    SWIFT_VERSION: "5.0"
+
+targets:
+  DSInputInstaller:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - path: Sources
+      - path: Resources
+        excludes:
+          - Info.plist
+          # DSInput.app is embedded by build-installer.sh AFTER xcodebuild, not
+          # as an Xcode resource (Xcode would try to re-process the nested app).
+          - DSInput.app
+    settings:
+      base:
+        ARCHS: arm64
+        # Signed by build-installer.sh after the IME is embedded; the build
+        # itself is unsigned (CODE_SIGNING_ALLOWED=NO on the command line).
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        INFOPLIST_FILE: Resources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.madeye.dsinput.installer
+        PRODUCT_NAME: DSInputInstaller
+    dependencies:
+      - sdk: AppKit.framework
+      - sdk: SwiftUI.framework
+      - sdk: Carbon.framework
+
+schemes:
+  DSInputInstaller:
+    build:
+      targets:
+        DSInputInstaller: all
+    run:
+      config: Debug
+    archive:
+      config: Release

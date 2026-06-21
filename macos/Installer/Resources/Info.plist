@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Info.plist for DSInputInstaller — a normal macOS app (NOT an input method),
+    so it needs no ".inputmethod." id or IMK keys. It bundles DSInput.app in its
+    Resources and installs it into ~/Library/Input Methods.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.github.madeye.dsinput.installer</string>
+    <key>CFBundleName</key>
+    <string>DSInputInstaller</string>
+    <key>CFBundleDisplayName</key>
+    <string>Install DS Input</string>
+    <key>CFBundleExecutable</key>
+    <string>DSInputInstaller</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <!--
+        Required for the "Log Out Now" button: we drive System Events via Apple
+        events, which triggers a one-time Automation permission prompt showing
+        this text.
+    -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>DS Input needs permission to log you out so macOS can finish registering the input method.</string>
+</dict>
+</plist>

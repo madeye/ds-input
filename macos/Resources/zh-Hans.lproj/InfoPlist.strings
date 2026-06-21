@@ -1,0 +1,3 @@
+CFBundleName = "DSInput";
+CFBundleDisplayName = "DS 输入法";
+"io.github.madeye.inputmethod.dsinput.pinyin" = "DS 输入法";

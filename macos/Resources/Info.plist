@@ -1,11 +1,39 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Info.plist for the DSInput input method (Swift frontend, built with xcodebuild
+    via project.yml/XcodeGen). project.yml points INFOPLIST_FILE here and does NOT
+    regenerate it, so this file is the single source of truth — edits live here.
+
+    Keep it complete; a missing IMK key silently breaks input-source registration
+    (TISRegisterInputSource returns noErr but the source never appears in Settings).
+
+    ┌───────────────────────────────────────────────────────────────────────────┐
+    │ HARD REQUIREMENT, learned the hard way: the bundle id and every            │
+    │ TISInputSourceID MUST contain a ".inputmethod." segment, i.e.              │
+    │   io.github.madeye.inputmethod.dsinput[.<mode>]                            │
+    │ macOS's input-source scanner only enrolls a bundle as a keyboard input     │
+    │ method when its identifier follows this convention (every Apple IME,       │
+    │ WeType, and vChewing do). An id WITHOUT ".inputmethod." (e.g. the earlier  │
+    │ io.github.madeye.dsinput) is signed, notarized, placed correctly — and     │
+    │ STILL never shows up. Do not drop the ".inputmethod." segment.             │
+    └───────────────────────────────────────────────────────────────────────────┘
+-->
 <plist version="1.0">
 <dict>
     <!-- Standard bundle metadata -->
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <!--
+        Derived from PRODUCT_BUNDLE_IDENTIFIER (set per-config in project.yml) so
+        Xcode Debug builds take a distinct id (…​.dsinput.debug) and can't shadow
+        the installed Release bundle in LaunchServices. MUST keep the
+        ".inputmethod." segment (see the file header).
+    -->
     <key>CFBundleIdentifier</key>
-    <string>io.github.madeye.dsinput</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 
     <key>CFBundleName</key>
     <string>DSInput</string>
@@ -19,14 +47,39 @@
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
 
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
     <key>CFBundleExecutable</key>
     <string>DSInput</string>
 
     <key>CFBundlePackageType</key>
     <string>APPL</string>
 
+    <!--
+        Marks the bundle as a real macOS application. Xcode injects this (and the
+        DT*/platform keys) automatically; keeping it here is harmless and makes the
+        plist self-describing. Without it the input-source scanner would not treat
+        the bundle as a launchable macOS app.
+    -->
+    <key>CFBundleSupportedPlatforms</key>
+    <array>
+        <string>MacOSX</string>
+    </array>
+
+    <!-- App category; present on every system/third-party IME bundle. -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+
+    <!-- Finder / app icon (the .icns). Distinct from the input-menu icon below. -->
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
 
     <!-- Prevent a Dock icon / menubar appearance; run as a background service -->
     <key>LSUIElement</key>
@@ -38,19 +91,29 @@
     <!-- InputMethodKit keys -->
 
     <!--
-        This name must match what you pass to IMKServer(name:...) in AppDelegate.
-        macOS routes composition events to the server registered under this name.
+        Must match the name AppDelegate.swift passes to IMKServer(name:…), which
+        reads it back from this key. macOS routes composition events to the server
+        registered under this name. Reverse-DNS in the bundle-id namespace.
     -->
     <key>InputMethodConnectionName</key>
-    <string>DSInput_Connection</string>
+    <string>io.github.madeye.inputmethod.dsinput_Connection</string>
 
     <!--
-        The Swift class name for the IMKInputController subclass.
-        Must be the fully-qualified Swift class name (module prefix for ObjC
-        interop is the product module name, which equals the executable name).
+        The IMKInputController subclass. The Swift class is annotated
+        @objc(DSInputController) so its Objective-C runtime name is exactly
+        "DSInputController" (without the @objc rename it would be the module-
+        prefixed "DSInput.DSInputController" and IMK could not find it).
     -->
     <key>InputMethodServerControllerClass</key>
     <string>DSInputController</string>
+
+    <!--
+        The input-menu / palette icon for the whole input method. REQUIRED for
+        registration: without tsInputMethodIconFileKey the system silently
+        refuses to surface the input source. menu_icon.pdf must be in Resources/.
+    -->
+    <key>tsInputMethodIconFileKey</key>
+    <string>menu_icon.pdf</string>
 
     <!--
         Declare the character repertoires this input method supports, as
@@ -66,19 +129,22 @@
 
     <!--
         Input mode dictionary. IMK requires the modes under tsInputModeListKey
-        (keyed by a unique reverse-DNS mode id) plus tsVisibleInputModeOrdered-
-        ArrayKey. The script keys (tsInputModeScriptKey / PrimaryInScriptKey)
-        are what file the mode under "Chinese (Simplified)" in the picker —
-        modeled on the system's own Chinese input methods.
+        (keyed by a unique reverse-DNS mode id — which also MUST carry the
+        ".inputmethod." segment) plus tsVisibleInputModeOrderedArrayKey. The
+        script keys (tsInputModeScriptKey / PrimaryInScriptKey) file the mode
+        under "Chinese (Simplified)" in the picker. The mode's user-visible name
+        comes from <lang>.lproj/InfoPlist.strings, keyed by this TISInputSourceID
+        (without it the picker shows the raw id). The per-mode icon keys mirror
+        tsInputMethodIconFileKey so the mode shows an icon too.
     -->
     <key>ComponentInputModeDict</key>
     <dict>
         <key>tsInputModeListKey</key>
         <dict>
-            <key>io.github.madeye.dsinput.pinyin</key>
+            <key>io.github.madeye.inputmethod.dsinput.pinyin</key>
             <dict>
                 <key>TISInputSourceID</key>
-                <string>io.github.madeye.dsinput.pinyin</string>
+                <string>io.github.madeye.inputmethod.dsinput.pinyin</string>
                 <key>tsInputModeScriptKey</key>
                 <string>smSimpChinese</string>
                 <key>tsInputModePrimaryInScriptKey</key>
@@ -95,11 +161,17 @@
                 <array>
                     <string>Hans</string>
                 </array>
+                <key>tsInputModeMenuIconFileKey</key>
+                <string>menu_icon.pdf</string>
+                <key>tsInputModePaletteIconFileKey</key>
+                <string>menu_icon.pdf</string>
+                <key>tsInputModeAlternateMenuIconFileKey</key>
+                <string>menu_icon.pdf</string>
             </dict>
         </dict>
         <key>tsVisibleInputModeOrderedArrayKey</key>
         <array>
-            <string>io.github.madeye.dsinput.pinyin</string>
+            <string>io.github.madeye.inputmethod.dsinput.pinyin</string>
         </array>
     </dict>
 

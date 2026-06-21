@@ -48,6 +48,25 @@ typedef void (*DsConvertCallback)(void *user_data,
                                   int32_t status,
                                   const char *text_utf8);
 
+/*
+ * Streaming result callback (see ds_session_convert_stream).
+ *   is_final == 0 : a PARTIAL update. status is DS_OK and text_utf8 is the
+ *                   CUMULATIVE Chinese text so far — replace your pre-edit with
+ *                   it. Fires zero or more times. Do NOT release per-request
+ *                   resources here.
+ *   is_final == 1 : the TERMINAL outcome. On DS_OK, text_utf8 is the final
+ *                   (sanitized) sentence; on a DS_ERR_* status it is a message.
+ *                   Fires EXACTLY ONCE and is always the last call for a given
+ *                   request_id — release per-request resources here.
+ * text_utf8 is valid ONLY during the call; copy it if needed. Runs on a worker
+ * thread — hop to your UI thread before touching composition state.
+ */
+typedef void (*DsStreamCallback)(void *user_data,
+                                 uint64_t request_id,
+                                 int32_t status,
+                                 int32_t is_final,
+                                 const char *text_utf8);
+
 /* ---- Engine lifecycle ---------------------------------------------------- */
 
 /* Create an engine. config_path may be NULL to use the per-user default path.
@@ -91,6 +110,18 @@ char      *ds_session_get_input(DsSession *session);
 uint64_t   ds_session_convert(DsSession *session,
                               DsConvertCallback callback,
                               void *user_data);
+
+/* Like ds_session_convert, but streams the conversion: `callback` fires with
+ * is_final=0 for each partial (cumulative) update as tokens arrive, then exactly
+ * once with is_final=1 for the terminal outcome. Lowers perceived latency by
+ * filling the pre-edit incrementally. Same supersession semantics: a newer
+ * request makes this one's terminal call status DS_ERR_CANCELLED, and stale
+ * partials are suppressed. Honors the `stream` config flag (when false, no
+ * partials fire — only the single terminal call). Returns a request id, or 0 if
+ * the buffer is empty. Tie per-request resources to the is_final=1 call. */
+uint64_t   ds_session_convert_stream(DsSession *session,
+                                     DsStreamCallback callback,
+                                     void *user_data);
 
 /* Cancel any in-flight request (its callback fires with DS_ERR_CANCELLED). */
 void       ds_session_cancel(DsSession *session);

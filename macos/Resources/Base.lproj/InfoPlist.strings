@@ -1,0 +1,4 @@
+CFBundleName = "DSInput";
+CFBundleDisplayName = "DS Input";
+/* Input-mode name shown in System Settings ▸ Input Sources, keyed by TISInputSourceID */
+"io.github.madeye.inputmethod.dsinput.pinyin" = "DS Input";

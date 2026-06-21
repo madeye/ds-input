@@ -224,6 +224,57 @@ pub unsafe extern "C" fn ds_session_convert(
     })
 }
 
+/// Callback type matching `DsStreamCallback` in dsime.h. Fires zero-or-more
+/// times with `is_final = 0` (a partial, cumulative pre-edit), then exactly once
+/// with `is_final = 1` (the terminal outcome — final text or DS_ERR_*).
+pub type DsStreamCallback = extern "C" fn(
+    user_data: *mut c_void,
+    request_id: u64,
+    status: i32,
+    is_final: i32,
+    text_utf8: *const c_char,
+);
+
+/// # Safety
+/// `session` is valid; `callback` is a valid function pointer; `user_data`
+/// stays valid until the terminal (`is_final = 1`) callback is invoked.
+#[no_mangle]
+pub unsafe extern "C" fn ds_session_convert_stream(
+    session: *mut Session,
+    callback: DsStreamCallback,
+    user_data: *mut c_void,
+) -> u64 {
+    let Some(s) = session_ref(session) else {
+        return 0;
+    };
+    let ud_partial = UserData(user_data);
+    let ud_final = UserData(user_data);
+    s.convert_stream(
+        move |request_id, cumulative| {
+            let ud = &ud_partial;
+            let text = CString::new(cumulative).unwrap_or_else(|_| CString::new("").unwrap());
+            callback(
+                ud.0,
+                request_id,
+                0, /* DS_OK */
+                0, /* partial */
+                text.as_ptr(),
+            );
+        },
+        move |outcome| {
+            let ud = ud_final;
+            let text = CString::new(outcome.text).unwrap_or_else(|_| CString::new("").unwrap());
+            callback(
+                ud.0,
+                outcome.request_id,
+                outcome.status,
+                1, /* final */
+                text.as_ptr(),
+            );
+        },
+    )
+}
+
 /// # Safety
 /// `session` is a valid pointer from `ds_session_new`.
 #[no_mangle]

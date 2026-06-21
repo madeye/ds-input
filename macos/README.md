@@ -20,15 +20,31 @@ bash macos/build.sh
 
 The script:
 1. Runs `cargo build --release` in `../core` to produce `libdsime.a`.
-2. Compiles the three Swift source files with `swiftc`, statically linking
+2. Compiles the Objective-C frontend with `clang`, statically linking
    `libdsime.a` plus the required system frameworks.
-3. Assembles `macos/build/DSInput.app` and ad-hoc signs it.
+3. Assembles `macos/build/DSInput.app` and signs it with
+   `DSInput.entitlements`.
 
 Use `--debug` for an unoptimised debug build:
 
 ```bash
 bash macos/build.sh --debug
 ```
+
+## Xcode
+
+Generate the local Xcode project with XcodeGen:
+
+```bash
+cd macos
+xcodegen generate --spec project.yml
+xed DSInput.xcodeproj
+```
+
+The generated `DSInput.xcodeproj` is intentionally ignored by git. The project
+builds the Rust core in a pre-build phase, links `libdsime.a`, and signs debug
+builds ad-hoc with `DSInput.entitlements` for local development. Use `build.sh`
+for Developer ID signing and notarized installable builds.
 
 ## Install
 
@@ -38,11 +54,9 @@ Copy the app to the system Input Methods folder:
 cp -R macos/build/DSInput.app ~/Library/Input\ Methods/
 ```
 
-Then re-login or run:
-
-```bash
-/System/Library/CoreServices/pbs -flush
-```
+Then **log out and back in** (required for a first install — the input-source
+picker is only repopulated at login; `pbs -flush` alone does not pick up a
+brand-new input method).
 
 ## Enable in System Settings
 
@@ -85,10 +99,11 @@ Config is stored at `~/Library/Application Support/DSInput/config.json`.
 ## Architecture
 
 ```
-AppDelegate.swift           — NSApplication + IMKServer startup; holds shared DsEngine
-DSInputController.swift     — IMKInputController subclass; owns one DsSession per client
-PreferencesWindowController.swift — AppKit settings window backed by ds_engine_get/set_config_json
-dsime_bridge.h              — Bridging header exposing core/include/dsime.h to Swift
+main.m                      — NSApplication entry point
+DSInputAppDelegate.m        — IMKServer startup; holds shared DsEngine
+DSInputController.m         — IMKInputController subclass; owns one DsSession per client
+PreferencesWindowController.m — AppKit settings window backed by ds_engine_get/set_config_json
+DSInputShared.m             — shared Rust engine pointer + UTF-8 helpers
 ```
 
 The Rust core (`libdsime.a`) is statically linked — the distributed `.app`
@@ -97,7 +112,14 @@ has no external dylib dependencies beyond system frameworks.
 ## Troubleshooting
 
 **Input method not listed in System Settings**
-Run `killall pbs` and re-login. The `pbs` daemon caches the list of input methods.
+On macOS 13+ (strictly enforced on macOS 26) the system only surfaces an input
+method in the picker if its bundle is **Developer-ID signed AND notarized**. An
+ad-hoc signed bundle launches fine and `TISRegisterInputSource()` even returns
+`noErr`, but it is silently never shown. Make sure `build.sh` signed + notarized
+the app (`spctl -a -t exec DSInput.app` should say "accepted / Notarized
+Developer ID"), then **log out and back in** — newly installed input sources are
+only scanned into the picker at login. `killall pbs` / `pbs -flush` alone is not
+enough for a brand-new input source.
 
 **"DS Input" appears but typing does nothing**
 Check Console.app for `[DSInput]` log entries. Ensure the API key is set.

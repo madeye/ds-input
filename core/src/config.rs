@@ -47,6 +47,9 @@ fn default_timeout_ms() -> u64 {
 fn default_debounce_ms() -> u32 {
     180
 }
+fn default_stream() -> bool {
+    true
+}
 
 /// The full, serializable user configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +78,10 @@ pub struct Config {
     /// Idle time after the last keystroke before the frontend should convert.
     #[serde(default = "default_debounce_ms")]
     pub debounce_ms: u32,
+    /// Stream the conversion (SSE) so the pre-edit fills in token-by-token.
+    /// Lower perceived latency; disable for a single final delivery.
+    #[serde(default = "default_stream")]
+    pub stream: bool,
 }
 
 impl Default for Config {
@@ -88,6 +95,7 @@ impl Default for Config {
             max_tokens: default_max_tokens(),
             timeout_ms: default_timeout_ms(),
             debounce_ms: default_debounce_ms(),
+            stream: default_stream(),
         }
     }
 }

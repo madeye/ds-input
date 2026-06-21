@@ -21,7 +21,7 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 // The crate exposes the C ABI as public `extern "C"` functions; call them
 // directly so this binary tests the real FFI boundary.
 use dsime::{
-    ds_engine_get_config_json, ds_engine_new, ds_engine_set_config_json, ds_session_convert,
+    ds_engine_get_config_json, ds_engine_new, ds_engine_set_config_json, ds_session_convert_stream,
     ds_session_free, ds_session_new, ds_session_reset, ds_session_set_input, ds_string_free,
     ds_version, Engine,
 };
@@ -30,10 +30,13 @@ struct Done {
     tx: SyncSender<(i32, String)>,
 }
 
-extern "C" fn on_result(
+/// Streaming callback: print each partial (cumulative) update live on stderr,
+/// and hand the terminal outcome to the main thread via the channel.
+extern "C" fn on_stream(
     user_data: *mut c_void,
     _request_id: u64,
     status: i32,
+    is_final: i32,
     text_utf8: *const c_char,
 ) {
     let text = if text_utf8.is_null() {
@@ -43,9 +46,15 @@ extern "C" fn on_result(
             .to_string_lossy()
             .into_owned()
     };
-    // Recover the channel; the main thread keeps `Done` alive until we send.
     let done = unsafe { &*(user_data as *const Done) };
-    let _ = done.tx.send((status, text));
+    if is_final != 0 {
+        let _ = done.tx.send((status, text));
+    } else {
+        // Overwrite the line so the pre-edit appears to fill in live.
+        use std::io::Write;
+        eprint!("\r\x1b[2K… {text}");
+        let _ = std::io::stderr().flush();
+    }
 }
 
 fn main() {
@@ -87,11 +96,14 @@ fn main() {
         let done = Box::new(Done { tx });
         let done_ptr = Box::into_raw(done);
 
-        let req = ds_session_convert(session, on_result, done_ptr as *mut c_void);
+        let req = ds_session_convert_stream(session, on_stream, done_ptr as *mut c_void);
         eprintln!("request #{req} sent for: {pinyin:?}");
 
         match rx.recv_timeout(std::time::Duration::from_secs(30)) {
-            Ok((0, text)) => println!("{text}"),
+            Ok((0, text)) => {
+                eprintln!(); // end the live partial line before the final result
+                println!("{text}");
+            }
             Ok((status, msg)) => {
                 eprintln!("conversion failed (status {status}): {msg}");
                 cleanup(session, engine, done_ptr);

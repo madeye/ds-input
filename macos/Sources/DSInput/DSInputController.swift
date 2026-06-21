@@ -27,29 +27,29 @@ import InputMethodKit
 
 // MARK: - C callback (must be a top-level @convention(c) function)
 
-/// Called by the Rust core on a background thread.
-/// We hop to the main queue and check request-id freshness before applying.
-private func convertCallback(
+/// Streaming result callback, called by the Rust core on a background thread.
+/// Fires with isFinal=0 for each partial (cumulative) pre-edit update, then once
+/// with isFinal=1 for the terminal outcome. We hop to the main queue to apply.
+private func convertStreamCallback(
     userData: UnsafeMutableRawPointer?,
     requestId: UInt64,
     status: Int32,
+    isFinal: Int32,
     textUtf8: UnsafePointer<CChar>?
 ) {
     guard let userData = userData else { return }
 
-    // Reconstruct the controller reference.  We used Unmanaged.passRetained
-    // when scheduling the conversion; balance it here unconditionally.
+    // We used Unmanaged.passRetained when scheduling the conversion. Per dsime.h
+    // the retain is tied to the TERMINAL call: balance it only when isFinal=1,
+    // and merely borrow it on partial updates.
     let unmanaged = Unmanaged<DSInputController>.fromOpaque(userData)
-    let controller = unmanaged.takeRetainedValue()
+    let controller = isFinal != 0
+        ? unmanaged.takeRetainedValue()
+        : unmanaged.takeUnretainedValue()
 
     // Copy the C string before the callback returns (text_utf8 is only valid
     // during the call, per dsime.h).
-    let text: String?
-    if let ptr = textUtf8 {
-        text = String(cString: ptr)
-    } else {
-        text = nil
-    }
+    let text: String? = textUtf8.map { String(cString: $0) }
 
     DispatchQueue.main.async {
         controller.handleConversionResult(requestId: requestId, status: status, text: text)
@@ -233,12 +233,13 @@ final class DSInputController: IMKInputController {
         latestRequestId += 1
         let expectedId = latestRequestId
 
-        // Pass self as userData via Unmanaged retain; the callback releases it.
+        // Pass self as userData via Unmanaged retain; the terminal (is_final=1)
+        // callback releases it. Streaming fills the pre-edit token-by-token.
         let retained = Unmanaged.passRetained(self).toOpaque()
-        let cRequestId = ds_session_convert(s, convertCallback, retained)
+        let cRequestId = ds_session_convert_stream(s, convertStreamCallback, retained)
 
-        // If the buffer was empty ds_session_convert returns 0 and the callback
-        // is never invoked, so we'd leak the retain.  Guard that case.
+        // If the buffer was empty ds_session_convert_stream returns 0 and the
+        // callback never fires, so we'd leak the retain.  Guard that case.
         if cRequestId == 0 {
             _ = Unmanaged<DSInputController>.fromOpaque(retained).takeRetainedValue()
         }
