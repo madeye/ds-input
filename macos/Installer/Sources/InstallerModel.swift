@@ -82,6 +82,10 @@ final class InstallerModel: ObservableObject {
         }
         try fm.copyItem(at: src, to: installedIMEURL)
 
+        // Strip the download quarantine that a copied-from-a-quarantined-installer
+        // bundle inherits — a quarantined input method is never surfaced/loaded.
+        stripQuarantine(installedIMEURL)
+
         set(progress: "Registering with the system…")
         runLSRegister(installedIMEURL)
         TISRegisterInputSource(installedIMEURL as CFURL)
@@ -188,6 +192,19 @@ final class InstallerModel: ObservableObject {
         let lsregister = "/System/Library/Frameworks/CoreServices.framework/Versions/A/"
             + "Frameworks/LaunchServices.framework/Support/lsregister"
         _ = try? runProcess(lsregister, ["-f", url.path])
+    }
+
+    /// Recursively remove com.apple.quarantine from a bundle (macOS `xattr` has
+    /// no reliable `-r`, so walk it and call removexattr directly).
+    private func stripQuarantine(_ url: URL) {
+        let attr = "com.apple.quarantine"
+        func clear(_ u: URL) {
+            _ = u.withUnsafeFileSystemRepresentation { removexattr($0, attr, 0) }
+        }
+        clear(url)
+        if let en = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
+            for case let f as URL in en { clear(f) }
+        }
     }
 
     @discardableResult
