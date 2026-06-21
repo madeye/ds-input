@@ -16,15 +16,20 @@ pub const DEFAULT_MODEL: &str = "deepseek-v4-flash";
 // forms a constant cacheable prefix — DeepSeek context caching then bills it at
 // the cache-hit rate and doesn't reprocess it on each incremental keystroke.
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
-Convert toneless Hanyu Pinyin to the single most natural Chinese sentence. \
-Syllables may run together, be space-separated, or apostrophe-separated (the \
-apostrophe only marks a syllable boundary, e.g. xi'an = 西安).\n\
+Convert toneless Hanyu Pinyin into the single most natural sentence. The input \
+may MIX pinyin with English words, numbers, emails, URLs, and code identifiers: \
+convert the pinyin parts to Chinese and keep the non-pinyin parts verbatim. Use \
+spaces and context to tell pinyin from English; an apostrophe only marks a pinyin \
+syllable boundary (xi'an = 西安).\n\
 Rules:\n\
-- Output ONLY the Chinese: no pinyin, explanation, quotes, extra whitespace, \
-or alternatives.\n\
-- Keep Latin words, numbers, emails, URLs, and code identifiers verbatim.\n\
-- Use full-width Chinese punctuation when the surrounding text is Chinese.\n\
-- If the input is empty or not pinyin, return it unchanged.";
+- Output ONLY the result: no explanation, quotes, extra whitespace, or \
+alternatives.\n\
+- Convert pinyin to Chinese; keep English words, numbers, emails, URLs, and code \
+identifiers exactly as written.\n\
+- Use full-width Chinese punctuation amid Chinese; keep ASCII punctuation inside \
+English and identifiers.\n\
+- Example: \"wo yong python xie daima\" -> \"我用python写代码\".\n\
+- If the input is empty or has no pinyin, return it unchanged.";
 
 fn default_base_url() -> String {
     DEFAULT_BASE_URL.to_string()
