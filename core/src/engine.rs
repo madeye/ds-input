@@ -3,7 +3,8 @@
 
 use crate::api;
 use crate::config::Config;
-use std::path::PathBuf;
+use crate::ngram::NgramModel;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -55,6 +56,19 @@ pub struct Engine {
     client: reqwest::Client,
     config: RwLock<Arc<Config>>,
     config_path: PathBuf,
+    /// Local speculative-conversion model, trained from returned conversions and
+    /// persisted to `ngram_path`. Guarded by its own lock so speculation reads
+    /// don't contend with config reads.
+    ngram: RwLock<NgramModel>,
+    ngram_path: PathBuf,
+}
+
+/// The on-disk model lives next to the config file as `ngram.json`.
+fn ngram_path_for(config_path: &Path) -> PathBuf {
+    config_path
+        .parent()
+        .map(|p| p.join("ngram.json"))
+        .unwrap_or_else(|| PathBuf::from("ngram.json"))
 }
 
 impl Engine {
@@ -62,6 +76,9 @@ impl Engine {
         let config_path = config_path.unwrap_or_else(Config::default_path);
         let config = Config::load_or_create(&config_path)
             .map_err(|e| format!("failed to load config at {}: {e}", config_path.display()))?;
+
+        let ngram_path = ngram_path_for(&config_path);
+        let ngram = NgramModel::load_or_default(&ngram_path, config.ngram_order);
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -84,7 +101,42 @@ impl Engine {
             client,
             config: RwLock::new(Arc::new(config)),
             config_path,
+            ngram: RwLock::new(ngram),
+            ngram_path,
         }))
+    }
+
+    /// A speculative local conversion of `pinyin`, or `None` when speculation is
+    /// disabled or the local model cannot fully cover the input. The result is a
+    /// best guess to paint immediately; the remote conversion supersedes it.
+    pub fn speculate(&self, pinyin: &str) -> Option<String> {
+        if !self.config_snapshot().speculative {
+            return None;
+        }
+        let model = self.ngram.read().unwrap();
+        if model.is_empty() {
+            return None;
+        }
+        model.predict(pinyin)
+    }
+
+    /// Teach the local model that `pinyin` converted to `hanzi` (typically the
+    /// sentence the provider just returned). No-op when speculation is disabled
+    /// or the pair does not align (mixed/English input, length mismatch). Best-
+    /// effort persistence: a write failure is ignored since the model is only a
+    /// latency optimization.
+    pub fn learn(&self, pinyin: &str, hanzi: &str) {
+        if !self.config_snapshot().speculative {
+            return;
+        }
+        let learned = {
+            let mut model = self.ngram.write().unwrap();
+            model.learn(pinyin, hanzi)
+        };
+        if learned {
+            let model = self.ngram.read().unwrap();
+            let _ = model.save(&self.ngram_path);
+        }
     }
 
     pub fn config_snapshot(&self) -> Arc<Config> {
@@ -150,6 +202,14 @@ impl Session {
         self.buffer.lock().unwrap().clone()
     }
 
+    /// An instant local speculative conversion of the current buffer, or `None`
+    /// when speculation is disabled or the local model cannot cover the input.
+    /// Synchronous and cheap — a frontend can call this the moment the buffer
+    /// changes to show a guess, then let `convert`/`convert_stream` correct it.
+    pub fn speculate(&self) -> Option<String> {
+        self.engine.speculate(&self.get_input())
+    }
+
     /// Conservative estimate of the chat-context token count for the current
     /// buffer ([system prompt] + [pinyin]). No tokenizer dependency: ~2 chars per
     /// token, which over-estimates for ordinary English/pinyin so the budget
@@ -208,6 +268,11 @@ impl Session {
                 _ = cancel.notified() => Err(api::ConvertError::Cancelled),
                 r = api::convert(&engine.client, &cfg, &pinyin) => r,
             };
+            // Train the local speculative model from a successful conversion so
+            // the next identical/overlapping input can be guessed instantly.
+            if let Ok(text) = &result {
+                engine.learn(&pinyin, text);
+            }
             // The callback is invoked exactly once for every convert() that
             // returned a non-zero id (frontends rely on this to balance the
             // resources tied to `deliver`).
@@ -247,6 +312,16 @@ impl Session {
 
         handle.spawn(async move {
             let result = if cfg.stream {
+                // Paint the instant local speculation as the first partial (if
+                // the model can cover this input), before the network responds —
+                // the streamed remote tokens then overwrite it. Guarded by the
+                // generation check so a stale speculation can't clobber a newer
+                // request's pre-edit.
+                if active_gen.load(Ordering::SeqCst) == my_gen {
+                    if let Some(guess) = engine.speculate(&pinyin) {
+                        on_partial(request_id, &guess);
+                    }
+                }
                 let active_gen_p = active_gen.clone();
                 // `move` so the spawned future owns `on_partial` (needs only
                 // Send, not Sync). Drop partials from a superseded generation so
@@ -268,6 +343,9 @@ impl Session {
                     r = api::convert(&engine.client, &cfg, &pinyin) => r,
                 }
             };
+            if let Ok(text) = &result {
+                engine.learn(&pinyin, text);
+            }
             deliver(finalize(&active_gen, my_gen, request_id, result));
         });
 
