@@ -254,7 +254,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let temperature = Double(temperatureField.stringValue) ?? 0.3
         let maxTokens   = Int(maxTokensField.stringValue) ?? 512
         let timeoutMs   = UInt32(timeoutField.stringValue) ?? 10000
-        let debounceMs  = UInt32(debounceField.stringValue) ?? 180
+        let debounceMs  = UInt32(debounceField.stringValue) ?? 100
 
         let cfg = DsConfig(
             base_url:      baseUrlField.stringValue,

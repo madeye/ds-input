@@ -50,7 +50,7 @@ fn default_timeout_ms() -> u64 {
     8000
 }
 fn default_debounce_ms() -> u32 {
-    180
+    100
 }
 fn default_stream() -> bool {
     true

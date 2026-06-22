@@ -140,7 +140,7 @@ pub unsafe extern "C" fn ds_engine_config_path(engine: *mut Engine) -> *mut c_ch
 /// `engine` is a valid pointer from `ds_engine_new`.
 #[no_mangle]
 pub unsafe extern "C" fn ds_engine_debounce_ms(engine: *mut Engine) -> u32 {
-    engine_ref(engine).map(|e| e.debounce_ms()).unwrap_or(180)
+    engine_ref(engine).map(|e| e.debounce_ms()).unwrap_or(100)
 }
 
 // ---- Session lifecycle -----------------------------------------------------
