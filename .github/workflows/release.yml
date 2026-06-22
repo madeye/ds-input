@@ -1,0 +1,96 @@
+name: Release
+
+# Cut a release by pushing a tag:  git tag v0.1.0 && git push origin v0.1.0
+#
+# Builds the Windows universal installer (x64 + ARM64) and the macOS installer,
+# then publishes a GitHub release with both attached. Both are **ad-hoc signed**
+# — the Windows .exe is fully usable (Windows has no notarization); the macOS
+# .zip is a build artifact only: an ad-hoc IME will NOT register in System
+# Settings, so replace the macOS asset on the release with a locally-built,
+# Developer ID-signed + notarized installer before sharing it.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # build the installers on demand (no release is published)
+
+permissions:
+  contents: write # the release job creates the GitHub release + uploads assets
+
+jobs:
+  windows-installer:
+    name: Windows installer (x64 + ARM64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      # build.ps1 -Arch all builds both arch payloads (skips an arch whose MSVC
+      # toolset is missing); build-installer.ps1 -SkipBuild packages ../dist into
+      # the single universal exe. Uses the default VS 2022 generator.
+      - name: Build universal installer
+        shell: pwsh
+        working-directory: windows
+        run: |
+          ./build.ps1 -Arch all -Config Release
+          ./installer/build-installer.ps1 -SkipBuild -Config Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: windows/installer/build/Release/DSInputInstaller.exe
+          if-no-files-found: error
+
+  macos-installer:
+    name: macOS installer (ad-hoc)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      # No SIGN_IDENTITY in the environment → build.sh / build-installer.sh
+      # ad-hoc sign. --zip emits DSInputInstaller.zip next to the .app.
+      - name: Build installer (ad-hoc, zipped)
+        run: bash macos/Installer/build-installer.sh --zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-installer
+          path: macos/Installer/build/DSInputInstaller.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [windows-installer, macos-installer]
+    # Only publish a release for tag pushes; workflow_dispatch just builds.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      # Give the assets version-stamped, platform-clear names.
+      - name: Stage release assets
+        run: |
+          mkdir -p out
+          cp "artifacts/windows-installer/DSInputInstaller.exe" \
+             "out/DSInputInstaller-${GITHUB_REF_NAME}-windows-x64-arm64.exe"
+          cp "artifacts/macos-installer/DSInputInstaller.zip" \
+             "out/DSInputInstaller-${GITHUB_REF_NAME}-macos.zip"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## DS Input ${{ github.ref_name }}
+
+            | Platform | Asset | Notes |
+            |----------|-------|-------|
+            | Windows (x64 + ARM64) | `DSInputInstaller-${{ github.ref_name }}-windows-x64-arm64.exe` | Universal elevated installer. |
+            | macOS | `DSInputInstaller-${{ github.ref_name }}-macos.zip` | **Ad-hoc CI build — replace with the Developer ID-signed + notarized installer before distributing.** |
