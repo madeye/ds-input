@@ -28,19 +28,39 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core
-      # build.ps1 -Arch all builds both arch payloads (skips an arch whose MSVC
-      # toolset is missing); build-installer.ps1 -SkipBuild packages ../dist into
-      # the single universal exe. Uses the default VS 2022 generator.
-      - name: Build universal installer
+      # CMake's VS-generator auto-discovery fails on the runner ("could not find
+      # any instance of Visual Studio") from a plain shell. Instead set up the
+      # MSVC env per-arch with msvc-dev-cmd and build each arch with the Ninja
+      # (single-config) generator, which takes the target arch from that env.
+      - name: Set up MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Build core + TSF (x64)
         shell: pwsh
         working-directory: windows
-        run: |
-          ./build.ps1 -Arch all -Config Release
-          ./installer/build-installer.ps1 -SkipBuild -Config Release
+        run: ./build.ps1 -Arch x64 -Config Release -Generator Ninja
+      - name: Set up MSVC (ARM64 cross)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64_arm64
+      - name: Build core + TSF (arm64)
+        shell: pwsh
+        working-directory: windows
+        run: ./build.ps1 -Arch arm64 -Config Release -Generator Ninja
+      # Package the universal installer (always x64) with the x64 env active.
+      - name: Set up MSVC (x64) for installer
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Package universal installer
+        shell: pwsh
+        working-directory: windows
+        run: ./installer/build-installer.ps1 -SkipBuild -Config Release -Generator Ninja
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: windows/installer/build/Release/DSInputInstaller.exe
+          path: windows/installer/build/DSInputInstaller.exe
           if-no-files-found: error
 
   macos-installer:
@@ -54,6 +74,13 @@ jobs:
           workspaces: core
       - name: Install XcodeGen
         run: brew install xcodegen
+      # Pre-build the core staticlib so it exists at xcodebuild planning time.
+      # The Xcode project references core/target/release/libdsime.a as a link
+      # input; on a clean runner it doesn't exist yet, and Xcode plans the link
+      # before running the cargo pre-build script phase → "Build input file
+      # cannot be found". Building it up front sidesteps that ordering.
+      - name: Pre-build core staticlib
+        run: cargo build --release --manifest-path core/Cargo.toml
       # No SIGN_IDENTITY in the environment → build.sh / build-installer.sh
       # ad-hoc sign. --zip emits DSInputInstaller.zip next to the .app.
       - name: Build installer (ad-hoc, zipped)
