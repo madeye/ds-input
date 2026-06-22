@@ -127,13 +127,23 @@ impl Engine {
     /// or the pair does not align (mixed/English input, length mismatch). Best-
     /// effort persistence: a write failure is ignored since the model is only a
     /// latency optimization.
+    ///
+    /// Each user-confirmed conversion is trained `USER_LEARN_WEIGHT` times so
+    /// that a single observation overrides any competing seed-corpus bigram after
+    /// just one use — the user's explicit feedback is more reliable than the
+    /// background frequency data.
     pub fn learn(&self, pinyin: &str, hanzi: &str) {
         if !self.config_snapshot().speculative {
             return;
         }
+        const USER_LEARN_WEIGHT: usize = 5;
         let learned = {
             let mut model = self.ngram.write().unwrap();
-            model.learn(pinyin, hanzi)
+            let mut any = false;
+            for _ in 0..USER_LEARN_WEIGHT {
+                any |= model.learn(pinyin, hanzi);
+            }
+            any
         };
         if learned {
             let model = self.ngram.read().unwrap();

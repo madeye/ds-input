@@ -87,6 +87,12 @@ impl NgramModel {
     /// `pinyin<TAB>hanzi[<TAB>weight]`, learned `weight` times (default 1).
     /// Returns how many lines contributed at least one observation. Malformed or
     /// non-aligning lines are skipped, so a bad corpus degrades gracefully.
+    ///
+    /// Multi-syllable corpus entries only train bigrams and higher-order contexts,
+    /// not the per-syllable unigram. Unigram entries (single syllable ↔ single
+    /// character) are the only source of truth for character frequency; otherwise
+    /// domain-heavy word lists (e.g. many IT terms starting with 协) skew every
+    /// unigram toward obscure domain characters and away from common ones.
     pub fn train_from_corpus(&mut self, corpus: &str) -> usize {
         let mut learned = 0;
         for line in corpus.lines() {
@@ -103,9 +109,12 @@ impl NgramModel {
                 .and_then(|w| w.trim().parse::<u32>().ok())
                 .unwrap_or(1)
                 .max(1);
+            let pinyin = pinyin.trim();
+            let hanzi = hanzi.trim();
+            let is_single = hanzi.chars().count() == 1;
             let mut any = false;
             for _ in 0..weight {
-                any |= self.learn(pinyin.trim(), hanzi.trim());
+                any |= self.learn_inner(pinyin, hanzi, is_single);
             }
             if any {
                 learned += 1;
@@ -146,6 +155,15 @@ impl NgramModel {
     ///
     /// Returns whether anything was learned.
     pub fn learn(&mut self, pinyin: &str, hanzi: &str) -> bool {
+        self.learn_inner(pinyin, hanzi, true)
+    }
+
+    /// Internal learn; `include_unigram` controls whether k=0 (the per-syllable
+    /// unigram) is updated. Call from `train_from_corpus` with `false` for
+    /// multi-syllable entries so domain-word lists don't flood unigrams with
+    /// characters that are common in specialized vocabularies but rare in everyday
+    /// use (e.g. 协 from hundreds of IT "协议/协同" terms).
+    fn learn_inner(&mut self, pinyin: &str, hanzi: &str, include_unigram: bool) -> bool {
         let Some(sylls) = segment(pinyin) else {
             return false;
         };
@@ -160,6 +178,9 @@ impl NgramModel {
             for k in 0..self.order {
                 if k > i {
                     break;
+                }
+                if k == 0 && !include_unigram {
+                    continue;
                 }
                 let key = context_key(&chars[i - k..i], &sylls[i]);
                 let dist = self.counts.entry(key).or_default();
@@ -451,8 +472,9 @@ mod tests {
         assert_eq!(m.predict("shengrikuaile").as_deref(), Some("生日快乐"));
         // A weighted particle wins the unigram back-off for a lone syllable.
         assert_eq!(m.predict("de").as_deref(), Some("的"));
-        // A valid syllable absent from the corpus yields no speculation.
-        assert_eq!(m.predict("lv"), None);
+        // "nve" is a valid toneless pinyin syllable (for 女/虐 with ü) that is
+        // absent from the seed corpus → refuse to speculate.
+        assert_eq!(m.predict("nve"), None);
     }
 
     #[test]
@@ -461,13 +483,17 @@ mod tests {
         let learned = m.train_from_corpus(
             "# a comment\n\
              \n\
+             ni\t你\t3\n\
              nihao\t你好\t3\n\
              not-aligned\t你好吗\n\
              justonecolumn\n\
+             shi\t世\n\
+             jie\t界\n\
              shijie\t世界\n",
         );
-        // Only the two well-formed, aligning lines contribute.
-        assert_eq!(learned, 2);
+        // 5 aligning lines (3 single-char + 2 multi-char); 2 are silently skipped.
+        assert_eq!(learned, 5);
+        // Single-char entries provide unigrams; multi-char entries the bigrams.
         assert_eq!(m.predict("nihaoshijie").as_deref(), Some("你好世界"));
     }
 }

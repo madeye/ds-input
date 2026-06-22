@@ -11,6 +11,12 @@ use std::ffi::{c_char, c_void, CStr, CString};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::Mutex;
+
+// Multiple tokio runtimes in one process are flaky under concurrent Rust test
+// scheduling. This global mutex forces the integration tests to run one at a
+// time, which eliminates the cross-runtime race without adding a new crate.
+static SERIAL: Mutex<()> = Mutex::new(());
 
 use dsime::{
     ds_engine_free, ds_engine_learn, ds_engine_new, ds_engine_set_config_json, ds_session_convert,
@@ -71,6 +77,7 @@ extern "C" fn capture(user_data: *mut c_void, _req: u64, status: i32, text: *con
 
 #[test]
 fn fresh_engine_ships_pretrained_speculation() {
+    let _g = SERIAL.lock().unwrap();
     // A brand-new engine (no prior learning, no conversion) already speculates
     // common phrases from the embedded seed corpus.
     let cfg_path = temp_config("pretrained");
@@ -100,6 +107,7 @@ fn fresh_engine_ships_pretrained_speculation() {
 
 #[test]
 fn learn_then_speculate_locally() {
+    let _g = SERIAL.lock().unwrap();
     let cfg_path = temp_config("learn");
     let cpath = CString::new(cfg_path.to_string_lossy().as_bytes()).unwrap();
 
@@ -119,8 +127,8 @@ fn learn_then_speculate_locally() {
         ds_session_set_input(session, input.as_ptr());
         assert_eq!(take_string(ds_session_speculate(session)), "你好世界");
 
-        // A valid syllable the model has never seen yields no speculation.
-        let unseen = CString::new("lv").unwrap();
+        // "nve" is a valid toneless syllable absent from the seed corpus.
+        let unseen = CString::new("nve").unwrap();
         ds_session_set_input(session, unseen.as_ptr());
         assert_eq!(take_string(ds_session_speculate(session)), "");
 
@@ -132,6 +140,7 @@ fn learn_then_speculate_locally() {
 
 #[test]
 fn successful_conversion_auto_trains_model() {
+    let _g = SERIAL.lock().unwrap();
     // A real (mock) conversion should train the local model, so a later
     // speculation of the same input needs no network at all.
     let port = spawn_mock(r#"{"choices":[{"message":{"role":"assistant","content":"你好世界"}}]}"#);
@@ -221,6 +230,7 @@ extern "C" fn capture_stream(
 
 #[test]
 fn speculation_is_the_first_stream_partial() {
+    let _g = SERIAL.lock().unwrap();
     // Pre-train the model, then stream a conversion: the very first partial must
     // be the instant local guess, ahead of the remote deltas, and the terminal
     // result is still the authoritative remote text.
