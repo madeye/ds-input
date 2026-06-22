@@ -78,7 +78,9 @@ impl Engine {
             .map_err(|e| format!("failed to load config at {}: {e}", config_path.display()))?;
 
         let ngram_path = ngram_path_for(&config_path);
-        let ngram = NgramModel::load_or_default(&ngram_path, config.ngram_order);
+        // Fresh installs start from the embedded pretrained baseline; an existing
+        // on-disk model (the user's accumulated learning) takes precedence.
+        let ngram = NgramModel::load_or_pretrained(&ngram_path, config.ngram_order);
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)

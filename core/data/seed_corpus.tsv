@@ -1,0 +1,236 @@
+# Seed corpus for the local speculative n-gram model (core/src/ngram.rs).
+#
+# Each line is one observed conversion the model trains on, tab-separated:
+#     <toneless-pinyin>\t<chinese>\t[weight]
+# The pinyin must segment into exactly as many syllables as there are Han
+# characters (one syllable per character) — the same alignment rule learn()
+# enforces — otherwise the line is skipped. `weight` (optional, default 1) is how
+# many times the pair is counted, used to bias the unigram back-off toward the
+# most common reading of a syllable. Lines starting with `#` and blank lines are
+# ignored.
+#
+# This is a small, hand-curated high-frequency vocabulary, not a full language
+# model: it covers the everyday words and phrases where an instant local guess
+# matters most. It is embedded into the core at build time, so every frontend
+# ships with speculation working out of the box; the model keeps learning the
+# user's own phrasing on top of it.
+
+# --- particles & very high-frequency single characters ---------------------
+de	的	8
+shi	是	8
+le	了	6
+bu	不	6
+wo	我	6
+ni	你	6
+ta	他	4
+you	有	5
+zai	在	5
+zhe	这	4
+na	那	3
+men	们	4
+ge	个	4
+ren	人	4
+hao	好	5
+hen	很	3
+dou	都	3
+he	和	3
+jiu	就	3
+yao	要	3
+hui	会	3
+dao	到	3
+shuo	说	3
+xiang	想	3
+kan	看	3
+lai	来	3
+qu	去	3
+gei	给	2
+ye	也	3
+ma	吗	3
+ba	吧	2
+ne	呢	2
+hai	还	2
+mei	没	3
+duo	多	2
+da	大	2
+xiao	小	2
+shang	上	3
+xia	下	2
+zhong	中	2
+guo	国	2
+jia	家	2
+qian	钱	2
+ai	爱	2
+shu	书	2
+nian	年	2
+yue	月	2
+
+# --- pronouns & question words ---------------------------------------------
+women	我们
+nimen	你们
+tamen	他们
+shenme	什么	3
+zenme	怎么	2
+weishenme	为什么	2
+nali	那里
+zheli	这里
+
+# --- greetings & courtesy ---------------------------------------------------
+nihao	你好	3
+nihaoma	你好吗
+xiexie	谢谢	3
+xiexieni	谢谢你
+zaijian	再见	2
+duibuqi	对不起	2
+meiguanxi	没关系	2
+qing	请	2
+buyongxie	不用谢
+
+# --- common verbs & connectives --------------------------------------------
+xihuan	喜欢	2
+zhidao	知道	2
+juede	觉得
+yinwei	因为	2
+suoyi	所以	2
+danshi	但是	2
+keyi	可以	2
+yinggai	应该
+xuyao	需要	2
+
+# --- time -------------------------------------------------------------------
+jintian	今天	2
+mingtian	明天	2
+zuotian	昨天
+xianzai	现在	2
+shijian	时间	2
+xiaoshi	小时
+fenzhong	分钟
+xingqi	星期
+
+# --- countries & places -----------------------------------------------------
+zhongguo	中国	2
+zhongwen	中文	2
+meiguo	美国
+riben	日本
+beijing	北京	2
+shanghai	上海	2
+guojia	国家
+chengshi	城市
+difang	地方
+ditu	地图
+shijie	世界	2
+
+# --- directions -------------------------------------------------------------
+zuobian	左边
+youbian	右边
+qianmian	前面
+houmian	后面
+shangmian	上面
+xiamian	下面
+limian	里面
+waimian	外面
+dongxi	东西
+
+# --- people & family --------------------------------------------------------
+baba	爸爸
+mama	妈妈
+gege	哥哥
+jiejie	姐姐
+didi	弟弟
+meimei	妹妹
+haizi	孩子
+pengyou	朋友	2
+laoshi	老师	2
+xuesheng	学生	2
+yisheng	医生
+tongshi	同事
+
+# --- study & work -----------------------------------------------------------
+xuexi	学习	2
+gongzuo	工作	2
+xuexiao	学校
+daxue	大学
+jiaoshi	教室
+kaoshi	考试
+zuoye	作业
+gongsi	公司	2
+huiyi	会议
+kaihui	开会
+renwu	任务
+jihua	计划
+xiangmu	项目
+
+# --- technology -------------------------------------------------------------
+diannao	电脑	2
+shouji	手机	2
+dianhua	电话
+wangluo	网络
+wangzhan	网站
+ruanjian	软件
+chengxu	程序
+shuju	数据
+daima	代码
+kaifa	开发
+sheji	设计
+chanpin	产品
+yonghu	用户
+mima	密码
+youjian	邮件
+
+# --- food & drink -----------------------------------------------------------
+chifan	吃饭	2
+heshui	喝水
+mifan	米饭
+shuiguo	水果
+kafei	咖啡
+niunai	牛奶
+cha	茶
+pijiu	啤酒
+
+# --- transport --------------------------------------------------------------
+huoche	火车
+feiji	飞机
+qiche	汽车
+ditie	地铁
+jichang	机场
+chuzuche	出租车
+
+# --- everyday places --------------------------------------------------------
+yiyuan	医院
+yinhang	银行
+fandian	饭店
+shangdian	商店
+tushuguan	图书馆
+bangongshi	办公室
+
+# --- life & leisure ---------------------------------------------------------
+xinwen	新闻
+dianying	电影	2
+yinyue	音乐
+yundong	运动
+liwu	礼物
+shengri	生日
+kuaile	快乐
+shengrikuaile	生日快乐
+xinnian	新年
+chunjie	春节
+tianqi	天气
+xiayu	下雨
+
+# --- colors -----------------------------------------------------------------
+yanse	颜色
+hongse	红色
+lanse	蓝色
+baise	白色
+heise	黑色
+
+# --- money ------------------------------------------------------------------
+duoshao	多少	2
+pianyi	便宜
+gui	贵
+jiage	价格
+
+# --- feelings & health ------------------------------------------------------
+woaini	我爱你
+shenti	身体
+jiankang	健康
+xiuxi	休息

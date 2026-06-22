@@ -70,6 +70,35 @@ extern "C" fn capture(user_data: *mut c_void, _req: u64, status: i32, text: *con
 }
 
 #[test]
+fn fresh_engine_ships_pretrained_speculation() {
+    // A brand-new engine (no prior learning, no conversion) already speculates
+    // common phrases from the embedded seed corpus.
+    let cfg_path = temp_config("pretrained");
+    let cpath = CString::new(cfg_path.to_string_lossy().as_bytes()).unwrap();
+
+    unsafe {
+        let engine: *mut Engine = ds_engine_new(cpath.as_ptr());
+        assert!(!engine.is_null());
+        let session: *mut Session = ds_session_new(engine);
+
+        for (input, expected) in [("nihao", "你好"), ("xiexie", "谢谢"), ("beijing", "北京")]
+        {
+            let cin = CString::new(input).unwrap();
+            ds_session_set_input(session, cin.as_ptr());
+            assert_eq!(
+                take_string(ds_session_speculate(session)),
+                expected,
+                "fresh engine should speculate {input:?} from the seed corpus"
+            );
+        }
+
+        ds_session_free(session);
+        ds_engine_free(engine);
+    }
+    let _ = std::fs::remove_dir_all(cfg_path.parent().unwrap());
+}
+
+#[test]
 fn learn_then_speculate_locally() {
     let cfg_path = temp_config("learn");
     let cpath = CString::new(cfg_path.to_string_lossy().as_bytes()).unwrap();
@@ -78,25 +107,20 @@ fn learn_then_speculate_locally() {
         let engine: *mut Engine = ds_engine_new(cpath.as_ptr());
         assert!(!engine.is_null());
 
-        // Teach the model a couple of phrases, exactly as a frontend would after
-        // the user commits some text.
-        let py = CString::new("nihao").unwrap();
-        let hz = CString::new("你好").unwrap();
+        // Teach the model a phrase, exactly as a frontend would after the user
+        // commits some text. Learning the whole phrase records the in-context
+        // bigrams, so it speculates back verbatim even past the seed baseline.
+        let py = CString::new("nihaoshijie").unwrap();
+        let hz = CString::new("你好世界").unwrap();
         assert_eq!(ds_engine_learn(engine, py.as_ptr(), hz.as_ptr()), 0);
-        let py2 = CString::new("shijie").unwrap();
-        let hz2 = CString::new("世界").unwrap();
-        assert_eq!(ds_engine_learn(engine, py2.as_ptr(), hz2.as_ptr()), 0);
 
         let session: *mut Session = ds_session_new(engine);
-
-        // A fully-covered input speculates locally, even recombining syllables
-        // learned from different phrases.
         let input = CString::new("nihaoshijie").unwrap();
         ds_session_set_input(session, input.as_ptr());
         assert_eq!(take_string(ds_session_speculate(session)), "你好世界");
 
-        // An input with an unseen syllable yields no speculation (empty string).
-        let unseen = CString::new("nihaowomen").unwrap();
+        // A valid syllable the model has never seen yields no speculation.
+        let unseen = CString::new("lv").unwrap();
         ds_session_set_input(session, unseen.as_ptr());
         assert_eq!(take_string(ds_session_speculate(session)), "");
 
@@ -129,8 +153,9 @@ fn successful_conversion_auto_trains_model() {
         let input = CString::new("nihaoshijie").unwrap();
         ds_session_set_input(session, input.as_ptr());
 
-        // Before any conversion the model is empty → no speculation.
-        assert_eq!(take_string(ds_session_speculate(session)), "");
+        // The pretrained baseline may guess something, but not the correct
+        // in-context sentence yet — that is what the conversion will teach.
+        assert_ne!(take_string(ds_session_speculate(session)), "你好世界");
 
         let (tx, rx) = sync_channel::<(i32, String)>(1);
         let req = ds_session_convert(session, capture, &tx as *const _ as *mut c_void);

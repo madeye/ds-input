@@ -115,8 +115,10 @@ char      *ds_session_get_input(DsSession *session);
  * ds_session_convert[_stream] request runs — the remote result then supersedes
  * it. Returns an empty string when speculation is disabled (config `speculative`
  * = false) or the model can't fully cover the input. Synchronous and cheap; safe
- * to call on every keystroke. The local model is trained automatically from each
- * successful remote conversion (and via ds_engine_learn). */
+ * to call on every keystroke. The model ships PRETRAINED on a high-frequency
+ * vocabulary, so it speculates common phrases on first launch; it is then
+ * trained further, automatically, from each successful remote conversion (and
+ * via ds_engine_learn). */
 char      *ds_session_speculate(DsSession *session);
 
 /* Kick off async conversion of the current buffer. Cancels any previous

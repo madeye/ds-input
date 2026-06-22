@@ -28,6 +28,12 @@ use std::path::Path;
 /// off to the per-syllable unigram).
 pub const DEFAULT_ORDER: usize = 2;
 
+/// A hand-curated, high-frequency pinyin→Chinese corpus embedded into the binary
+/// so the model ships *pretrained* — speculation works on first launch, before
+/// the user has converted anything. See the file header for its format. The
+/// user's own conversions are then learned on top of this base.
+pub const SEED_CORPUS: &str = include_str!("../data/seed_corpus.tsv");
+
 /// Separates the left-context characters from the current syllable inside a
 /// context key. `\u{1}` (Start-of-Heading) never occurs in pinyin or Han text.
 const KEY_SEP: char = '\u{1}';
@@ -64,19 +70,59 @@ impl NgramModel {
         }
     }
 
+    /// Build a model of `order` pretrained from the embedded [`SEED_CORPUS`], so
+    /// speculation is useful immediately on a fresh install.
+    pub fn pretrained(order: usize) -> Self {
+        let mut model = NgramModel::with_order(order);
+        model.train_from_corpus(SEED_CORPUS);
+        model
+    }
+
     /// True when nothing has been learned yet.
     pub fn is_empty(&self) -> bool {
         self.counts.is_empty()
     }
 
-    /// Load a model from `path`, or return a fresh model of `default_order` if
-    /// the file does not exist. A corrupt/unreadable file is treated as absent
-    /// so a bad cache can never wedge the engine — speculation just starts over.
-    pub fn load_or_default(path: &Path, default_order: usize) -> Self {
+    /// Train from a tab-separated corpus: each non-comment line is
+    /// `pinyin<TAB>hanzi[<TAB>weight]`, learned `weight` times (default 1).
+    /// Returns how many lines contributed at least one observation. Malformed or
+    /// non-aligning lines are skipped, so a bad corpus degrades gracefully.
+    pub fn train_from_corpus(&mut self, corpus: &str) -> usize {
+        let mut learned = 0;
+        for line in corpus.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut fields = line.split('\t');
+            let (Some(pinyin), Some(hanzi)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            let weight = fields
+                .next()
+                .and_then(|w| w.trim().parse::<u32>().ok())
+                .unwrap_or(1)
+                .max(1);
+            let mut any = false;
+            for _ in 0..weight {
+                any |= self.learn(pinyin.trim(), hanzi.trim());
+            }
+            if any {
+                learned += 1;
+            }
+        }
+        learned
+    }
+
+    /// Load a model from `path`, or fall back to a [`pretrained`](Self::pretrained)
+    /// model of `default_order` when the file is absent or unreadable. A
+    /// corrupt/unreadable file is treated as absent so a bad cache can never
+    /// wedge the engine — speculation just restarts from the shipped baseline.
+    pub fn load_or_pretrained(path: &Path, default_order: usize) -> Self {
         match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text)
-                .unwrap_or_else(|_| NgramModel::with_order(default_order)),
-            Err(_) => NgramModel::with_order(default_order),
+                .unwrap_or_else(|_| NgramModel::pretrained(default_order)),
+            Err(_) => NgramModel::pretrained(default_order),
         }
     }
 
@@ -379,13 +425,49 @@ mod tests {
         m.learn("nihaoshijie", "你好世界");
         m.save(&path).unwrap();
 
-        let loaded = NgramModel::load_or_default(&path, DEFAULT_ORDER);
+        let loaded = NgramModel::load_or_pretrained(&path, DEFAULT_ORDER);
         assert!(!loaded.is_empty());
         assert_eq!(loaded.predict("nihaoshijie").as_deref(), Some("你好世界"));
 
-        // A missing file yields a fresh, empty model.
+        // A missing file falls back to the embedded pretrained baseline.
         let _ = std::fs::remove_dir_all(&dir);
-        let fresh = NgramModel::load_or_default(&path, 3);
-        assert!(fresh.is_empty());
+        let fresh = NgramModel::load_or_pretrained(&path, 3);
+        assert!(
+            !fresh.is_empty(),
+            "missing file should load the pretrained seed"
+        );
+        assert_eq!(fresh.predict("nihao").as_deref(), Some("你好"));
+    }
+
+    #[test]
+    fn pretrained_covers_common_phrases() {
+        let m = NgramModel::pretrained(DEFAULT_ORDER);
+        assert!(!m.is_empty());
+        // Phrases drawn from the embedded seed corpus speculate out of the box.
+        assert_eq!(m.predict("nihao").as_deref(), Some("你好"));
+        assert_eq!(m.predict("xiexie").as_deref(), Some("谢谢"));
+        assert_eq!(m.predict("zhongguo").as_deref(), Some("中国"));
+        assert_eq!(m.predict("beijing").as_deref(), Some("北京"));
+        assert_eq!(m.predict("shengrikuaile").as_deref(), Some("生日快乐"));
+        // A weighted particle wins the unigram back-off for a lone syllable.
+        assert_eq!(m.predict("de").as_deref(), Some("的"));
+        // A valid syllable absent from the corpus yields no speculation.
+        assert_eq!(m.predict("lv"), None);
+    }
+
+    #[test]
+    fn train_from_corpus_skips_comments_and_malformed_lines() {
+        let mut m = NgramModel::with_order(2);
+        let learned = m.train_from_corpus(
+            "# a comment\n\
+             \n\
+             nihao\t你好\t3\n\
+             not-aligned\t你好吗\n\
+             justonecolumn\n\
+             shijie\t世界\n",
+        );
+        // Only the two well-formed, aligning lines contribute.
+        assert_eq!(learned, 2);
+        assert_eq!(m.predict("nihaoshijie").as_deref(), Some("你好世界"));
     }
 }
