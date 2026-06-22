@@ -180,7 +180,7 @@ std::string BuildConfigJson(HWND dlg) {
     if (temp.empty())       temp = "0.3";
     if (max_tokens.empty()) max_tokens = "256";
     if (timeout.empty())    timeout = "8000";
-    if (debounce.empty())   debounce = "180";
+    if (debounce.empty())   debounce = "100";
 
     std::string json;
     json += "{\n";

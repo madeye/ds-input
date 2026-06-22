@@ -112,8 +112,8 @@ void CTextService::_ArmDebounce() {
         }
     }
     // Relative due time in 100ns units, negative => relative. debounce_ms from
-    // the engine config (default 180ms).
-    uint32_t ms = _engine.valid() ? _engine.DebounceMs() : 180;
+    // the engine config (default 100ms).
+    uint32_t ms = _engine.valid() ? _engine.DebounceMs() : 100;
     ULARGE_INTEGER due;
     due.QuadPart = static_cast<ULONGLONG>(-(static_cast<LONGLONG>(ms) * 10000LL));
     FILETIME ft;

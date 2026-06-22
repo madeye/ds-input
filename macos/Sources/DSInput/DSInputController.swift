@@ -92,7 +92,7 @@ final class DSInputController: IMKInputController {
 
     /// Idle interval before we fire ds_session_convert.
     private var debounceDuration: TimeInterval {
-        guard let engine = sharedDsEngine else { return 0.18 }
+        guard let engine = sharedDsEngine else { return 0.10 }
         let ms = ds_engine_debounce_ms(engine)
         return Double(ms) / 1000.0
     }
