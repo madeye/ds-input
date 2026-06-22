@@ -23,7 +23,13 @@ param(
     [string]$Config = "Release",
     # "all" (default) builds x64 + arm64; or pick one.
     [ValidateSet("all", "x64", "arm64")]
-    [string]$Arch = "all"
+    [string]$Arch = "all",
+    # CMake generator. The default multi-config VS generator picks the toolset via
+    # -A and works from a VS dev prompt. CI (which can't discover the VS instance)
+    # passes "Ninja": a single-config generator that takes the target arch from the
+    # ambient MSVC environment (set up by, e.g., ilammy/msvc-dev-cmd) — so build one
+    # arch per invocation with the matching env active.
+    [string]$Generator = "Visual Studio 17 2022"
 )
 
 $ErrorActionPreference = "Stop"
@@ -80,19 +86,34 @@ foreach ($a in $Selected) {
         continue
     }
 
-    Write-Host "==> [$a] C++ (CMake, VS 2022, $cmakeA)" -ForegroundColor Cyan
+    Write-Host "==> [$a] C++ (CMake, $Generator, $cmakeA)" -ForegroundColor Cyan
     $BuildDir = Join-Path $ScriptDir "build/$a"
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+    # cmake.exe is a native command: a non-zero exit does NOT throw in PowerShell
+    # (even under $ErrorActionPreference="Stop"), so check $LASTEXITCODE explicitly
+    # — otherwise a configure failure falls through to a confusing Copy-Item error.
     try {
-        cmake -S $ScriptDir -B $BuildDir -G "Visual Studio 17 2022" -A $cmakeA `
-              "-DDSIME_CORE_DIR=$CoreOut"
-        cmake --build $BuildDir --config $Config
+        if ($Generator -like "Visual Studio*") {
+            # Multi-config VS generator: target arch via -A, build config via --config.
+            cmake -S $ScriptDir -B $BuildDir -G $Generator -A $cmakeA "-DDSIME_CORE_DIR=$CoreOut"
+            if ($LASTEXITCODE -ne 0) { throw "cmake configure failed (exit $LASTEXITCODE)" }
+            cmake --build $BuildDir --config $Config
+            if ($LASTEXITCODE -ne 0) { throw "cmake build failed (exit $LASTEXITCODE)" }
+            $OutDir = Join-Path $BuildDir $Config
+        } else {
+            # Single-config generator (e.g. Ninja): no -A — the target arch comes
+            # from the ambient MSVC env; config via -DCMAKE_BUILD_TYPE; flat output.
+            cmake -S $ScriptDir -B $BuildDir -G $Generator "-DCMAKE_BUILD_TYPE=$Config" "-DDSIME_CORE_DIR=$CoreOut"
+            if ($LASTEXITCODE -ne 0) { throw "cmake configure failed (exit $LASTEXITCODE)" }
+            cmake --build $BuildDir
+            if ($LASTEXITCODE -ne 0) { throw "cmake build failed (exit $LASTEXITCODE)" }
+            $OutDir = $BuildDir
+        }
     } catch {
-        Write-Warning "skipping $a — CMake build failed (is the $cmakeA MSVC toolset installed?): $_"
+        Write-Warning "skipping $a — CMake build failed (is the $cmakeA MSVC toolset / generator '$Generator' available?): $_"
         continue
     }
 
-    $OutDir = Join-Path $BuildDir $Config
     $Stage  = Join-Path $DistDir $a
     New-Item -ItemType Directory -Force -Path $Stage | Out-Null
     foreach ($f in @("dsime_tsf.dll", "DSInputSettings.exe")) {

@@ -14,7 +14,11 @@ param(
     [string]$Config = "Release",
     # Skip the (slow) core+frontend rebuild and just package whatever is already
     # staged in ../dist (useful when iterating on the installer itself).
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # CMake generator (see ../build.ps1). Default VS generator works from a dev
+    # prompt; CI passes "Ninja" with the x64 MSVC env active (the installer is
+    # always built x64 so one exe runs on x64 natively and ARM64 emulated).
+    [string]$Generator = "Visual Studio 17 2022"
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,7 +27,7 @@ $Win = Resolve-Path (Join-Path $Dir "..")
 
 if (-not $SkipBuild) {
     Write-Host "==> Building both arch payloads (build.ps1 -Arch all)" -ForegroundColor Cyan
-    & (Join-Path $Win "build.ps1") -Arch all -Config $Config
+    & (Join-Path $Win "build.ps1") -Arch all -Config $Config -Generator $Generator
 }
 
 Write-Host "==> Checking staged payloads" -ForegroundColor Cyan
@@ -38,13 +42,23 @@ foreach ($a in @("x64", "arm64")) {
     }
 }
 
-Write-Host "==> Compiling the installer (x64)" -ForegroundColor Cyan
+Write-Host "==> Compiling the installer (x64, $Generator)" -ForegroundColor Cyan
 $Build = Join-Path $Dir "build"
 New-Item -ItemType Directory -Force -Path $Build | Out-Null
-cmake -S $Dir -B $Build -G "Visual Studio 17 2022" -A x64
-cmake --build $Build --config $Config
-
-$Out = Join-Path $Build "$Config/DSInputInstaller.exe"
+# cmake is a native command — check $LASTEXITCODE (it doesn't throw on failure).
+if ($Generator -like "Visual Studio*") {
+    cmake -S $Dir -B $Build -G $Generator -A x64
+    if ($LASTEXITCODE -ne 0) { throw "installer cmake configure failed (exit $LASTEXITCODE)" }
+    cmake --build $Build --config $Config
+    if ($LASTEXITCODE -ne 0) { throw "installer cmake build failed (exit $LASTEXITCODE)" }
+    $Out = Join-Path $Build "$Config/DSInputInstaller.exe"
+} else {
+    cmake -S $Dir -B $Build -G $Generator "-DCMAKE_BUILD_TYPE=$Config"
+    if ($LASTEXITCODE -ne 0) { throw "installer cmake configure failed (exit $LASTEXITCODE)" }
+    cmake --build $Build
+    if ($LASTEXITCODE -ne 0) { throw "installer cmake build failed (exit $LASTEXITCODE)" }
+    $Out = Join-Path $Build "DSInputInstaller.exe"
+}
 Write-Host ""
 Write-Host "Installer built: $Out" -ForegroundColor Green
 Write-Host "Run it (double-click; it will prompt for administrator)."
