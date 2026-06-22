@@ -16,7 +16,11 @@
  *   a–z / '        → append to pinyinBuffer, show raw pinyin as pre-edit,
  *                    schedule debounced conversion
  *   Backspace       → pop last char from pinyinBuffer, reschedule conversion
- *   Space / Return  → commit current pre-edit, reset session
+ *   Space           → 分词: first Space appends a word-boundary space and
+ *                    re-converts; a DOUBLE space (two in a row) commits — the
+ *                    converted sentence, else the raw pinyin (boundaries
+ *                    trimmed). Mirrors the Windows TSF frontend.
+ *   Return          → commit current pre-edit, reset session
  *   Escape          → revert pre-edit to raw pinyin (cancel conversion),
  *                    or if already showing pinyin, clear entirely
  *   Any other key  → pass through if no active composition; else commit + pass
@@ -137,7 +141,7 @@ final class DSInputController: IMKInputController {
             return handleCommit(client: sender)
 
         case 0x31: // Space (kVK_Space)
-            return handleCommit(client: sender)
+            return handleSpace(client: sender)
 
         case 0x35: // Escape (kVK_Escape)
             return handleEscape(client: sender)
@@ -217,6 +221,44 @@ final class DSInputController: IMKInputController {
             showPreEdit(pinyinBuffer, client: sender)
             scheduleDebounce(client: sender)
         }
+        return true
+    }
+
+    /// Space does 分词 (word segmentation), matching the Windows TSF frontend:
+    /// the first Space appends a word-boundary space to the pinyin buffer and
+    /// re-converts; a DOUBLE space (two consecutive) confirms/commits. We detect
+    /// the second of two spaces by a trailing space already in the buffer.
+    private func handleSpace(client sender: Any!) -> Bool {
+        // With an empty buffer there's nothing to segment; let Space through.
+        guard !pinyinBuffer.isEmpty else { return false }
+
+        if pinyinBuffer.hasSuffix(" ") {
+            // Second consecutive space -> commit. Prefer the converted sentence;
+            // otherwise fall back to the raw pinyin with boundary spaces trimmed
+            // so text is always output, even with no/slow conversion.
+            let committed: String
+            if let text = preEditText, text != pinyinBuffer {
+                committed = text // converted Chinese
+            } else {
+                var trimmed = pinyinBuffer
+                while trimmed.hasSuffix(" ") { trimmed.removeLast() }
+                committed = trimmed
+            }
+            commit(committed, client: sender)
+            return true
+        }
+
+        // First space: append a 分词 boundary and re-arm auto-conversion. Keep
+        // showing the current conversion (if any) until the new result lands — a
+        // trailing boundary space doesn't change the sentence, so a quick
+        // double-space still commits the Chinese rather than the pinyin.
+        let wasConverted = preEditText != nil && preEditText != pinyinBuffer
+        pinyinBuffer.append(" ")
+        updateSessionInput()
+        if !wasConverted {
+            showPreEdit(pinyinBuffer, client: sender) // raw pinyin with boundary
+        }
+        scheduleDebounce(client: sender)
         return true
     }
 
