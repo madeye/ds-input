@@ -89,6 +89,12 @@ BOOL CTextService::_IsKeyEaten(ITfContext* /*pic*/, WPARAM wParam, LPARAM lParam
             // Only meaningful while we have something composing. With an empty
             // buffer, let the app handle Space/Enter/Backspace normally.
             return _HasComposition() ? TRUE : FALSE;
+        case VK_UP:
+        case VK_DOWN:
+        case VK_TAB:
+            // Up/down (and Tab = next) cycle through LLM candidates, but only once
+            // a converted sentence is shown; otherwise let the key reach the app.
+            return (_HasComposition() && _showingConverted) ? TRUE : FALSE;
         default:
             break;
     }
@@ -205,6 +211,23 @@ HRESULT CTextService::_HandleKey(ITfContext* pic, WPARAM wParam, LPARAM lParam,
             HRESULT hr = _EndComposition(pic);  // empty -> just tears down range
             _ResetBuffer();
             (void)hr;
+            return S_OK;
+        }
+        case VK_UP:
+        case VK_DOWN:
+        case VK_TAB: {
+            // Cycle alternative LLM conversions of the current input. A cached
+            // candidate shows instantly; going down (or Tab) past the last asks the
+            // core to regenerate a different one (streamed back via the usual
+            // handler); going up past the primary is a no-op (but still eaten).
+            int32_t dir = (wParam == VK_UP) ? -1 : 1;
+            dsime::CoreString alt = _session.CandidateCached(dir);
+            if (!alt.empty()) {
+                _displayText = alt.to_wstring();
+                _showingConverted = true;
+                return _UpdateCompositionText(pic, _displayText, TRUE);
+            }
+            if (dir > 0) _FireRegenerate();
             return S_OK;
         }
         case VK_BACK: {

@@ -174,6 +174,24 @@ void CTextService::_FireConversion() {
     _lastRequestId = reqId;
 }
 
+// ---- regeneration: ask for a DIFFERENT candidate (STA thread) --------------
+
+void CTextService::_FireRegenerate() {
+    // STA thread. Like _FireConversion, but asks the core for an alternative
+    // conversion that excludes the candidates already shown. The result streams
+    // back through the same thunk/handler and replaces the pre-edit.
+    if (!_HasComposition() || _pinyin.empty() || !_session.valid()) return;
+
+    _session.SetInput(_pinyin);
+    AddRef();  // terminal (is_final=1) stream callback releases it
+    uint64_t reqId = _session.Regenerate(&CTextService::_StreamCallbackThunk, this);
+    if (reqId == 0) {
+        Release();
+        return;
+    }
+    _lastRequestId = reqId;
+}
+
 // ---- conversion: core callback (WORKER THREAD) -----------------------------
 
 void CTextService::_ConvertCallbackThunk(void* user_data, uint64_t request_id,

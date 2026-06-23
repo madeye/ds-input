@@ -318,6 +318,73 @@ pub unsafe extern "C" fn ds_session_convert_stream(
     )
 }
 
+/// Move to another already-fetched candidate for the current input and return it
+/// (caller frees, never NULL). `direction > 0` goes to the NEXT candidate, `< 0`
+/// to the PREVIOUS one. Returns an empty string when there is none in that
+/// direction: going up past the primary conversion, or down past the last cached
+/// candidate — in the down case the frontend should call `ds_session_regenerate`
+/// to fetch a fresh alternative. Synchronous and cheap (cache only, no network).
+///
+/// # Safety
+/// `session` is a valid pointer from `ds_session_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ds_session_candidate_cached(
+    session: *mut Session,
+    direction: i32,
+) -> *mut c_char {
+    match session_ref(session) {
+        Some(s) => to_c_string(s.cached_candidate(direction).unwrap_or_default()),
+        None => to_c_string(""),
+    }
+}
+
+/// Ask the provider for a DIFFERENT conversion of the current buffer, avoiding
+/// every candidate already shown, and append it so `ds_session_candidate_cached`
+/// can revisit it. Same streaming callback contract and supersession semantics as
+/// `ds_session_convert_stream`; returns a request id, or 0 if the buffer is
+/// empty. Call this when the user asks for another candidate (down) and the cache
+/// is exhausted.
+///
+/// # Safety
+/// `session` is valid; `callback` is a valid function pointer; `user_data` stays
+/// valid until the terminal (`is_final = 1`) callback is invoked.
+#[no_mangle]
+pub unsafe extern "C" fn ds_session_regenerate(
+    session: *mut Session,
+    callback: DsStreamCallback,
+    user_data: *mut c_void,
+) -> u64 {
+    let Some(s) = session_ref(session) else {
+        return 0;
+    };
+    let ud_partial = UserData(user_data);
+    let ud_final = UserData(user_data);
+    s.regenerate(
+        move |request_id, cumulative| {
+            let ud = &ud_partial;
+            let text = CString::new(cumulative).unwrap_or_else(|_| CString::new("").unwrap());
+            callback(
+                ud.0,
+                request_id,
+                0, /* DS_OK */
+                0, /* partial */
+                text.as_ptr(),
+            );
+        },
+        move |outcome| {
+            let ud = ud_final;
+            let text = CString::new(outcome.text).unwrap_or_else(|_| CString::new("").unwrap());
+            callback(
+                ud.0,
+                outcome.request_id,
+                outcome.status,
+                1, /* final */
+                text.as_ptr(),
+            );
+        },
+    )
+}
+
 /// # Safety
 /// `session` is a valid pointer from `ds_session_new`.
 #[no_mangle]

@@ -199,6 +199,22 @@ public:
         return s_ ? ds_session_convert_stream(s_, callback, user_data) : 0;
     }
 
+    // Move to another already-fetched candidate for the current input
+    // (direction > 0 = next, < 0 = previous). Empty when there is none in that
+    // direction — going down, the caller then Regenerate()s. Synchronous (cache
+    // only, no network); the remote conversion always supersedes the n-gram guess
+    // so this only ever cycles LLM outputs.
+    CoreString CandidateCached(int32_t direction) const {
+        return CoreString(s_ ? ds_session_candidate_cached(s_, direction) : nullptr);
+    }
+
+    // Ask the provider for a DIFFERENT conversion of the current buffer, avoiding
+    // every candidate already shown, and append it. Same streaming contract as
+    // ConvertStream. Returns a request id, or 0 if the buffer is empty.
+    uint64_t Regenerate(DsStreamCallback callback, void* user_data) {
+        return s_ ? ds_session_regenerate(s_, callback, user_data) : 0;
+    }
+
     void Cancel() { if (s_) ds_session_cancel(s_); }
     void Reset()  { if (s_) ds_session_reset(s_); }
 
