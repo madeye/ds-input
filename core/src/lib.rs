@@ -363,7 +363,13 @@ pub unsafe extern "C" fn ds_session_regenerate(
         move |request_id, cumulative| {
             let ud = &ud_partial;
             let text = CString::new(cumulative).unwrap_or_else(|_| CString::new("").unwrap());
-            callback(ud.0, request_id, 0 /* DS_OK */, 0 /* partial */, text.as_ptr());
+            callback(
+                ud.0,
+                request_id,
+                0, /* DS_OK */
+                0, /* partial */
+                text.as_ptr(),
+            );
         },
         move |outcome| {
             let ud = ud_final;

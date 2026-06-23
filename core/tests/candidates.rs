@@ -68,16 +68,18 @@ fn spawn_seq_mock(bodies: Vec<&'static str>) -> (u16, Arc<Mutex<Vec<String>>>) {
                     if let Ok(text) = std::str::from_utf8(&raw) {
                         if let Some(i) = text.to_ascii_lowercase().find("content-length:") {
                             let rest = &text[i + "content-length:".len()..];
-                            let num: String =
-                                rest.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+                            let num: String = rest
+                                .trim_start()
+                                .chars()
+                                .take_while(|c| c.is_ascii_digit())
+                                .collect();
                             content_len = num.parse::<usize>().ok();
                         }
                     }
                 }
-                if let (Some(cl), Some(hdr_end)) = (
-                    content_len,
-                    raw.windows(4).position(|w| w == b"\r\n\r\n"),
-                ) {
+                if let (Some(cl), Some(hdr_end)) =
+                    (content_len, raw.windows(4).position(|w| w == b"\r\n\r\n"))
+                {
                     if raw.len() >= hdr_end + 4 + cl {
                         break;
                     }
@@ -103,7 +105,9 @@ extern "C" fn capture(user_data: *mut c_void, _req: u64, status: i32, text: *con
     let s = if text.is_null() {
         String::new()
     } else {
-        unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
     };
     let tx = unsafe { &*(user_data as *const SyncSender<(i32, String)>) };
     let _ = tx.send((status, s));
@@ -122,7 +126,9 @@ extern "C" fn capture_stream(
     let s = if text.is_null() {
         String::new()
     } else {
-        unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned()
+        unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned()
     };
     let tx = unsafe { &*(user_data as *const SyncSender<(i32, String)>) };
     let _ = tx.send((status, s));
@@ -166,14 +172,22 @@ fn down_regenerates_and_up_down_revisit_cached_candidates() {
 
         // 3. Down past the end -> regenerate a DIFFERENT conversion.
         let (tx2, rx2) = sync_channel::<(i32, String)>(1);
-        assert!(ds_session_regenerate(session, capture_stream, &tx2 as *const _ as *mut c_void) > 0);
-        let (st2, txt2) = rx2.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert!(
+            ds_session_regenerate(session, capture_stream, &tx2 as *const _ as *mut c_void) > 0
+        );
+        let (st2, txt2) = rx2
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
         assert_eq!(st2, 0);
         assert_eq!(txt2, "你好视界");
 
         // The regeneration request must have told the model to avoid the primary.
         let requests = seen.lock().unwrap();
-        assert_eq!(requests.len(), 2, "expected a convert + a regenerate request");
+        assert_eq!(
+            requests.len(),
+            2,
+            "expected a convert + a regenerate request"
+        );
         assert!(
             requests[1].contains("你好世界"),
             "regenerate request should exclude the already-shown candidate; body was:\n{}",
@@ -183,8 +197,14 @@ fn down_regenerates_and_up_down_revisit_cached_candidates() {
 
         // 4. Up returns to the primary; down revisits the regenerated one (cached,
         //    no third request); down again is exhausted.
-        assert_eq!(take_string(ds_session_candidate_cached(session, -1)), "你好世界");
-        assert_eq!(take_string(ds_session_candidate_cached(session, 1)), "你好视界");
+        assert_eq!(
+            take_string(ds_session_candidate_cached(session, -1)),
+            "你好世界"
+        );
+        assert_eq!(
+            take_string(ds_session_candidate_cached(session, 1)),
+            "你好视界"
+        );
         assert_eq!(take_string(ds_session_candidate_cached(session, 1)), "");
 
         ds_session_free(session);
@@ -215,7 +235,12 @@ fn candidate_cache_is_invalidated_when_input_changes() {
         ds_session_set_input(session, a.as_ptr());
         let (tx, rx) = sync_channel::<(i32, String)>(1);
         assert!(ds_session_convert(session, capture, &tx as *const _ as *mut c_void) > 0);
-        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap().1, "你好");
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap()
+                .1,
+            "你好"
+        );
 
         // Typing more changes the buffer: the old candidate must not be offered.
         let b = CString::new("nihaoma").unwrap();
