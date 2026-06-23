@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::sync::Notify;
 
 /// Outcome handed back to the FFI layer's callback.
@@ -52,7 +52,13 @@ fn finalize(
 /// Shared, thread-safe engine state. One per process is typical; cheap to share
 /// across sessions via `Arc`.
 pub struct Engine {
-    rt: Runtime,
+    /// Handle to the shared Tokio runtime, which is *owned* by [`EngineHandle`].
+    /// This is a `Handle`, not the `Runtime`: dropping the last `Arc<Engine>` —
+    /// which can happen on a worker thread when an in-flight task finishes after
+    /// the frontend freed the engine — must NOT run the runtime's (blocking)
+    /// shutdown, because dropping a `Runtime` on one of its own worker threads
+    /// panics. Dropping a `Handle` is harmless on any thread.
+    rt: Handle,
     client: reqwest::Client,
     config: RwLock<Arc<Config>>,
     config_path: PathBuf,
@@ -71,8 +77,24 @@ fn ngram_path_for(config_path: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("ngram.json"))
 }
 
-impl Engine {
-    pub fn new(config_path: Option<PathBuf>) -> Result<Arc<Engine>, String> {
+/// Owns the Tokio [`Runtime`] plus a strong reference to the shared [`Engine`].
+/// `ds_engine_new` hands a pointer to this across the FFI; `ds_engine_free` drops
+/// it on the *caller's* thread, so the runtime is always shut down off its own
+/// worker threads (dropping a `Runtime` on a worker thread panics). Sessions and
+/// in-flight tasks only ever hold an `Arc<Engine>` — which carries a runtime
+/// `Handle`, not the `Runtime` — so whichever task happens to drop the last
+/// `Arc<Engine>` can never trigger the runtime's shutdown.
+pub struct EngineHandle {
+    // Held only to own the runtime and shut it down on drop (never read directly;
+    // tasks spawn through the `Handle` in `Engine`). NB: field declaration order is
+    // drop order — `_rt` is dropped first, which cancels any in-flight tasks (their
+    // futures are dropped, not awaited), then the shared-engine strong ref is freed.
+    _rt: Runtime,
+    engine: Arc<Engine>,
+}
+
+impl EngineHandle {
+    pub fn new(config_path: Option<PathBuf>) -> Result<EngineHandle, String> {
         let config_path = config_path.unwrap_or_else(Config::default_path);
         let config = Config::load_or_create(&config_path)
             .map_err(|e| format!("failed to load config at {}: {e}", config_path.display()))?;
@@ -98,16 +120,31 @@ impl Engine {
             .build()
             .map_err(|e| format!("failed to build http client: {e}"))?;
 
-        Ok(Arc::new(Engine {
-            rt,
+        let engine = Arc::new(Engine {
+            // Tasks spawn onto this handle; the Runtime itself stays in `rt`.
+            rt: rt.handle().clone(),
             client,
             config: RwLock::new(Arc::new(config)),
             config_path,
             ngram: RwLock::new(ngram),
             ngram_path,
-        }))
+        });
+        Ok(EngineHandle { _rt: rt, engine })
     }
 
+    /// Borrow the shared engine — for the read-only `ds_engine_*` FFI accessors.
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
+    /// A fresh strong reference to the shared engine — for `ds_session_new`, so a
+    /// session keeps the engine state alive independently of this handle.
+    pub fn engine_arc(&self) -> Arc<Engine> {
+        Arc::clone(&self.engine)
+    }
+}
+
+impl Engine {
     /// A speculative local conversion of `pinyin`, or `None` when speculation is
     /// disabled or the local model cannot fully cover the input. The result is a
     /// best guess to paint immediately; the remote conversion supersedes it.
@@ -313,7 +350,7 @@ impl Session {
         let active_gen = self.active_gen.clone();
         let cancel = self.cancel.clone();
         let cfg = engine.config_snapshot();
-        let handle = engine.rt.handle().clone();
+        let handle = engine.rt.clone();
 
         let candidates = self.candidates.clone();
         handle.spawn(async move {
@@ -409,7 +446,7 @@ impl Session {
         let cancel = self.cancel.clone();
         let candidates = self.candidates.clone();
         let cfg = engine.config_snapshot();
-        let handle = engine.rt.handle().clone();
+        let handle = engine.rt.clone();
 
         handle.spawn(async move {
             let result = if cfg.stream {

@@ -23,7 +23,7 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use dsime::{
     ds_engine_get_config_json, ds_engine_new, ds_engine_set_config_json, ds_session_convert_stream,
     ds_session_free, ds_session_new, ds_session_reset, ds_session_set_input, ds_string_free,
-    ds_version, Engine,
+    ds_version, EngineHandle,
 };
 
 struct Done {
@@ -81,7 +81,7 @@ fn main() {
         // Use a throwaway config file so we never touch the user's real config.
         let tmp = std::env::temp_dir().join("dsime-cli-config.json");
         let cpath = CString::new(tmp.to_string_lossy().as_bytes()).unwrap();
-        let engine: *mut Engine = ds_engine_new(cpath.as_ptr());
+        let engine: *mut EngineHandle = ds_engine_new(cpath.as_ptr());
         assert!(!engine.is_null(), "engine creation failed");
 
         apply_env_overrides(engine);
@@ -121,7 +121,7 @@ fn main() {
     }
 }
 
-unsafe fn cleanup(session: *mut dsime::Session, engine: *mut Engine, done_ptr: *mut Done) {
+unsafe fn cleanup(session: *mut dsime::Session, engine: *mut EngineHandle, done_ptr: *mut Done) {
     ds_session_free(session);
     dsime::ds_engine_free(engine);
     drop(Box::from_raw(done_ptr));
@@ -129,7 +129,7 @@ unsafe fn cleanup(session: *mut dsime::Session, engine: *mut Engine, done_ptr: *
 
 /// Patch the freshly-created config with any env overrides via the JSON API,
 /// exactly as a Settings UI would.
-unsafe fn apply_env_overrides(engine: *mut Engine) {
+unsafe fn apply_env_overrides(engine: *mut EngineHandle) {
     let json_ptr = ds_engine_get_config_json(engine);
     if json_ptr.is_null() {
         return;

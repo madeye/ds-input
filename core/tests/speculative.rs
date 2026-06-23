@@ -21,7 +21,7 @@ static SERIAL: Mutex<()> = Mutex::new(());
 use dsime::{
     ds_engine_free, ds_engine_learn, ds_engine_new, ds_engine_set_config_json, ds_session_convert,
     ds_session_convert_stream, ds_session_free, ds_session_new, ds_session_set_input,
-    ds_session_speculate, ds_string_free, Engine, Session,
+    ds_session_speculate, ds_string_free, EngineHandle, Session,
 };
 
 /// A throwaway config path in a unique temp dir. The sibling `ngram.json` the
@@ -84,7 +84,7 @@ fn fresh_engine_ships_pretrained_speculation() {
     let cpath = CString::new(cfg_path.to_string_lossy().as_bytes()).unwrap();
 
     unsafe {
-        let engine: *mut Engine = ds_engine_new(cpath.as_ptr());
+        let engine: *mut EngineHandle = ds_engine_new(cpath.as_ptr());
         assert!(!engine.is_null());
         let session: *mut Session = ds_session_new(engine);
 
@@ -112,7 +112,7 @@ fn learn_then_speculate_locally() {
     let cpath = CString::new(cfg_path.to_string_lossy().as_bytes()).unwrap();
 
     unsafe {
-        let engine: *mut Engine = ds_engine_new(cpath.as_ptr());
+        let engine: *mut EngineHandle = ds_engine_new(cpath.as_ptr());
         assert!(!engine.is_null());
 
         // Teach the model a phrase, exactly as a frontend would after the user

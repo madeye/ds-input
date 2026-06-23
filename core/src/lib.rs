@@ -9,11 +9,10 @@ mod engine;
 // with the same logic the engine uses at runtime (single source of truth).
 pub mod ngram;
 
-pub use engine::{Engine, Session};
+pub use engine::{Engine, EngineHandle, Session};
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
-use std::sync::Arc;
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::new("").unwrap());
@@ -45,10 +44,10 @@ fn to_c_string(s: impl Into<Vec<u8>>) -> *mut c_char {
 /// # Safety
 /// `config_path` is NULL or a valid NUL-terminated UTF-8 string.
 #[no_mangle]
-pub unsafe extern "C" fn ds_engine_new(config_path: *const c_char) -> *mut Engine {
+pub unsafe extern "C" fn ds_engine_new(config_path: *const c_char) -> *mut EngineHandle {
     let path = cstr(config_path).map(std::path::PathBuf::from);
-    match Engine::new(path) {
-        Ok(engine) => Arc::into_raw(engine) as *mut Engine,
+    match EngineHandle::new(path) {
+        Ok(handle) => Box::into_raw(Box::new(handle)),
         Err(e) => {
             set_last_error(e);
             ptr::null_mut()
@@ -58,26 +57,31 @@ pub unsafe extern "C" fn ds_engine_new(config_path: *const c_char) -> *mut Engin
 
 /// # Safety
 /// `engine` is a pointer returned by `ds_engine_new`, used at most once here.
+/// All sessions created from it must already have been freed (`ds_session_free`).
 #[no_mangle]
-pub unsafe extern "C" fn ds_engine_free(engine: *mut Engine) {
+pub unsafe extern "C" fn ds_engine_free(engine: *mut EngineHandle) {
     if !engine.is_null() {
-        drop(Arc::from_raw(engine as *const Engine));
+        // Drops the Tokio runtime on THIS (the caller's) thread — never on a
+        // worker thread — cancelling any in-flight tasks, then releases this
+        // handle's strong ref to the shared engine.
+        drop(Box::from_raw(engine));
     }
 }
 
-/// Borrow an `Arc<Engine>` without taking ownership of the refcount.
-unsafe fn engine_ref<'a>(engine: *mut Engine) -> Option<&'a Engine> {
+/// Borrow the shared `Engine` behind an `EngineHandle` pointer, without taking
+/// ownership.
+unsafe fn engine_ref<'a>(engine: *mut EngineHandle) -> Option<&'a Engine> {
     if engine.is_null() {
         None
     } else {
-        Some(&*engine)
+        Some((*engine).engine())
     }
 }
 
 /// # Safety
 /// `engine` is a valid pointer from `ds_engine_new`.
 #[no_mangle]
-pub unsafe extern "C" fn ds_engine_reload_config(engine: *mut Engine) -> i32 {
+pub unsafe extern "C" fn ds_engine_reload_config(engine: *mut EngineHandle) -> i32 {
     let Some(e) = engine_ref(engine) else {
         return 5; // DS_ERR_CONFIG
     };
@@ -93,7 +97,7 @@ pub unsafe extern "C" fn ds_engine_reload_config(engine: *mut Engine) -> i32 {
 /// # Safety
 /// `engine` is a valid pointer from `ds_engine_new`.
 #[no_mangle]
-pub unsafe extern "C" fn ds_engine_get_config_json(engine: *mut Engine) -> *mut c_char {
+pub unsafe extern "C" fn ds_engine_get_config_json(engine: *mut EngineHandle) -> *mut c_char {
     let Some(e) = engine_ref(engine) else {
         return ptr::null_mut();
     };
@@ -110,7 +114,7 @@ pub unsafe extern "C" fn ds_engine_get_config_json(engine: *mut Engine) -> *mut 
 /// `engine` is valid; `json_utf8` is a valid NUL-terminated UTF-8 string.
 #[no_mangle]
 pub unsafe extern "C" fn ds_engine_set_config_json(
-    engine: *mut Engine,
+    engine: *mut EngineHandle,
     json_utf8: *const c_char,
 ) -> i32 {
     let Some(e) = engine_ref(engine) else {
@@ -132,7 +136,7 @@ pub unsafe extern "C" fn ds_engine_set_config_json(
 /// # Safety
 /// `engine` is a valid pointer from `ds_engine_new`.
 #[no_mangle]
-pub unsafe extern "C" fn ds_engine_config_path(engine: *mut Engine) -> *mut c_char {
+pub unsafe extern "C" fn ds_engine_config_path(engine: *mut EngineHandle) -> *mut c_char {
     let Some(e) = engine_ref(engine) else {
         return ptr::null_mut();
     };
@@ -142,7 +146,7 @@ pub unsafe extern "C" fn ds_engine_config_path(engine: *mut Engine) -> *mut c_ch
 /// # Safety
 /// `engine` is a valid pointer from `ds_engine_new`.
 #[no_mangle]
-pub unsafe extern "C" fn ds_engine_debounce_ms(engine: *mut Engine) -> u32 {
+pub unsafe extern "C" fn ds_engine_debounce_ms(engine: *mut EngineHandle) -> u32 {
     engine_ref(engine).map(|e| e.debounce_ms()).unwrap_or(100)
 }
 
@@ -151,14 +155,13 @@ pub unsafe extern "C" fn ds_engine_debounce_ms(engine: *mut Engine) -> u32 {
 /// # Safety
 /// `engine` is a valid pointer from `ds_engine_new` and outlives the session.
 #[no_mangle]
-pub unsafe extern "C" fn ds_session_new(engine: *mut Engine) -> *mut Session {
-    let Some(_) = engine_ref(engine) else {
+pub unsafe extern "C" fn ds_session_new(engine: *mut EngineHandle) -> *mut Session {
+    if engine.is_null() {
         return ptr::null_mut();
-    };
-    // Bump the engine refcount for the lifetime of this session.
-    Arc::increment_strong_count(engine as *const Engine);
-    let engine_arc = Arc::from_raw(engine as *const Engine);
-    let session = Box::new(Session::new(engine_arc));
+    }
+    // A session holds its own strong ref to the shared engine, so it stays valid
+    // for the session's whole lifetime even though the runtime lives in the handle.
+    let session = Box::new(Session::new((*engine).engine_arc()));
     Box::into_raw(session)
 }
 
@@ -223,7 +226,7 @@ pub unsafe extern "C" fn ds_session_speculate(session: *mut Session) -> *mut c_c
 /// UTF-8 strings.
 #[no_mangle]
 pub unsafe extern "C" fn ds_engine_learn(
-    engine: *mut Engine,
+    engine: *mut EngineHandle,
     pinyin_ascii: *const c_char,
     hanzi_utf8: *const c_char,
 ) -> i32 {

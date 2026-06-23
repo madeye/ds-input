@@ -13,7 +13,7 @@ use std::sync::mpsc::{sync_channel, SyncSender};
 use dsime::{
     ds_engine_free, ds_engine_new, ds_engine_set_config_json, ds_session_cancel,
     ds_session_convert, ds_session_convert_stream, ds_session_free, ds_session_new,
-    ds_session_set_input, Engine, Session,
+    ds_session_set_input, EngineHandle, Session,
 };
 
 /// Serve exactly one request: read the (ignored) body, reply with `body_json`.
@@ -58,7 +58,7 @@ fn convert_round_trips_through_mock_provider() {
     let cpath = CString::new(tmp.to_string_lossy().as_bytes()).unwrap();
 
     unsafe {
-        let engine: *mut Engine = ds_engine_new(cpath.as_ptr());
+        let engine: *mut EngineHandle = ds_engine_new(cpath.as_ptr());
         assert!(!engine.is_null());
 
         // Point at the mock and give a dummy key so the engine proceeds.
