@@ -145,6 +145,7 @@ private:
 
     // ---- conversion plumbing (Composition.cpp) ----
     void _FireConversion();  // STA thread: snapshot buffer + ds_session_convert_stream
+    void _FireRegenerate();  // STA thread: ask the core for a different candidate
     static void _ConvertCallbackThunk(void* user_data, uint64_t request_id,
                                       int32_t status, const char* text_utf8);
     // Streaming thunk (CORE WORKER THREAD): posts partials as WM_DSIME_CONVERT_PARTIAL

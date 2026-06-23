@@ -193,6 +193,22 @@ pub struct Session {
     /// outstanding task (its result is dropped) and wakes the notify.
     active_gen: Arc<AtomicU64>,
     cancel: Arc<Notify>,
+    /// LLM conversions of the current input the user can cycle through with
+    /// up/down. Shared into the worker task so a completed conversion can record
+    /// itself. Only ever holds remote (LLM) outputs — never n-gram guesses.
+    candidates: Arc<Mutex<Candidates>>,
+}
+
+/// The alternative LLM conversions for one input, plus the currently-shown index.
+/// `list[0]` is the primary conversion; later entries are regenerated on demand.
+#[derive(Default)]
+struct Candidates {
+    /// The exact pinyin these candidates were produced for. Navigation is only
+    /// valid while this matches the live buffer; once the user types more, the
+    /// next conversion replaces the whole set.
+    input: String,
+    list: Vec<String>,
+    cursor: usize,
 }
 
 impl Session {
@@ -203,7 +219,32 @@ impl Session {
             req_counter: AtomicU64::new(0),
             active_gen: Arc::new(AtomicU64::new(0)),
             cancel: Arc::new(Notify::new()),
+            candidates: Arc::new(Mutex::new(Candidates::default())),
         }
+    }
+
+    /// Move to the previous (`direction < 0`) or next (`direction >= 0`) cached
+    /// candidate for the current input and return it, or `None` when there is no
+    /// candidate in that direction (already at the primary going up, or none left
+    /// going down — the frontend then calls [`regenerate`](Self::regenerate)).
+    /// Synchronous; consults only the cache, never the network.
+    pub fn cached_candidate(&self, direction: i32) -> Option<String> {
+        let buffer = self.get_input();
+        let mut c = self.candidates.lock().unwrap();
+        if c.input != buffer || c.list.is_empty() {
+            return None;
+        }
+        let next = if direction >= 0 {
+            let n = c.cursor + 1;
+            if n >= c.list.len() {
+                return None;
+            }
+            n
+        } else {
+            c.cursor.checked_sub(1)?
+        };
+        c.cursor = next;
+        Some(c.list[next].clone())
     }
 
     pub fn set_input(&self, pinyin: &str) {
@@ -274,16 +315,18 @@ impl Session {
         let cfg = engine.config_snapshot();
         let handle = engine.rt.handle().clone();
 
+        let candidates = self.candidates.clone();
         handle.spawn(async move {
             let result = tokio::select! {
                 biased;
                 _ = cancel.notified() => Err(api::ConvertError::Cancelled),
-                r = api::convert(&engine.client, &cfg, &pinyin) => r,
+                r = api::convert(&engine.client, &cfg, &pinyin, &[]) => r,
             };
             // Train the local speculative model from a successful conversion so
             // the next identical/overlapping input can be guessed instantly.
             if let Ok(text) = &result {
                 engine.learn(&pinyin, text);
+                record_candidate(&candidates, &active_gen, my_gen, &pinyin, text, false);
             }
             // The callback is invoked exactly once for every convert() that
             // returned a non-zero id (frontends rely on this to balance the
@@ -307,6 +350,51 @@ impl Session {
         P: Fn(u64, &str) + Send + 'static,
         F: FnOnce(ConvertOutcome) + Send + 'static,
     {
+        // Normal conversion: no exclusions, paint the local speculation first,
+        // and the result replaces the candidate set.
+        self.stream_with(Vec::new(), true, false, on_partial, deliver)
+    }
+
+    /// Ask the provider for a DIFFERENT conversion of the current input, avoiding
+    /// every candidate already shown, and append it to the candidate list (so
+    /// up/down can revisit it without another request). Same streaming contract
+    /// as [`convert_stream`](Self::convert_stream). The frontend calls this when
+    /// [`cached_candidate`](Self::cached_candidate) returns `None` going down —
+    /// i.e. the user wants another option but none is cached yet. No local
+    /// speculation is painted (this is an alternative, not a first impression).
+    pub fn regenerate<P, F>(&self, on_partial: P, deliver: F) -> u64
+    where
+        P: Fn(u64, &str) + Send + 'static,
+        F: FnOnce(ConvertOutcome) + Send + 'static,
+    {
+        let buffer = self.get_input();
+        let exclude = {
+            let c = self.candidates.lock().unwrap();
+            if c.input == buffer {
+                c.list.clone()
+            } else {
+                Vec::new()
+            }
+        };
+        self.stream_with(exclude, false, true, on_partial, deliver)
+    }
+
+    /// Shared driver for `convert_stream` / `regenerate`. `exclude` lists the
+    /// already-shown conversions to avoid; `speculate` paints the local n-gram
+    /// guess as the first partial; `append` adds the result to the candidate list
+    /// (vs. replacing it).
+    fn stream_with<P, F>(
+        &self,
+        exclude: Vec<String>,
+        speculate: bool,
+        append: bool,
+        on_partial: P,
+        deliver: F,
+    ) -> u64
+    where
+        P: Fn(u64, &str) + Send + 'static,
+        F: FnOnce(ConvertOutcome) + Send + 'static,
+    {
         let pinyin = self.get_input();
         if pinyin.trim().is_empty() {
             return 0;
@@ -319,17 +407,18 @@ impl Session {
         let engine = self.engine.clone();
         let active_gen = self.active_gen.clone();
         let cancel = self.cancel.clone();
+        let candidates = self.candidates.clone();
         let cfg = engine.config_snapshot();
         let handle = engine.rt.handle().clone();
 
         handle.spawn(async move {
             let result = if cfg.stream {
                 // Paint the instant local speculation as the first partial (if
-                // the model can cover this input), before the network responds —
-                // the streamed remote tokens then overwrite it. Guarded by the
-                // generation check so a stale speculation can't clobber a newer
-                // request's pre-edit.
-                if active_gen.load(Ordering::SeqCst) == my_gen {
+                // enabled and the model can cover this input), before the network
+                // responds — the streamed remote tokens then overwrite it. Guarded
+                // by the generation check so a stale speculation can't clobber a
+                // newer request's pre-edit.
+                if speculate && active_gen.load(Ordering::SeqCst) == my_gen {
                     if let Some(guess) = engine.speculate(&pinyin) {
                         on_partial(request_id, &guess);
                     }
@@ -346,21 +435,50 @@ impl Session {
                 tokio::select! {
                     biased;
                     _ = cancel.notified() => Err(api::ConvertError::Cancelled),
-                    r = api::convert_stream(&engine.client, &cfg, &pinyin, on_delta) => r,
+                    r = api::convert_stream(&engine.client, &cfg, &pinyin, &exclude, on_delta) => r,
                 }
             } else {
                 tokio::select! {
                     biased;
                     _ = cancel.notified() => Err(api::ConvertError::Cancelled),
-                    r = api::convert(&engine.client, &cfg, &pinyin) => r,
+                    r = api::convert(&engine.client, &cfg, &pinyin, &exclude) => r,
                 }
             };
             if let Ok(text) = &result {
                 engine.learn(&pinyin, text);
+                record_candidate(&candidates, &active_gen, my_gen, &pinyin, text, append);
             }
             deliver(finalize(&active_gen, my_gen, request_id, result));
         });
 
         request_id
+    }
+}
+
+/// Record a successful LLM conversion in the candidate cache, unless a newer
+/// request has already superseded this one. `append` adds `text` as another
+/// option for the same input (regeneration); otherwise it replaces the set with
+/// a fresh `[text]` (a new conversion). A duplicate is never appended.
+fn record_candidate(
+    candidates: &Mutex<Candidates>,
+    active_gen: &AtomicU64,
+    my_gen: u64,
+    pinyin: &str,
+    text: &str,
+    append: bool,
+) {
+    if active_gen.load(Ordering::SeqCst) != my_gen {
+        return;
+    }
+    let mut c = candidates.lock().unwrap();
+    if append && c.input == pinyin {
+        if !c.list.iter().any(|t| t == text) {
+            c.list.push(text.to_string());
+        }
+        c.cursor = c.list.len().saturating_sub(1);
+    } else {
+        c.input = pinyin.to_string();
+        c.list = vec![text.to_string()];
+        c.cursor = 0;
     }
 }

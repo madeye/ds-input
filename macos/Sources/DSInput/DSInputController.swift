@@ -124,7 +124,13 @@ final class DSInputController: IMKInputController {
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard event.type == .keyDown else { return false }
 
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // Arrow / navigation keys report `.function` and `.numericPad` in their
+        // flags; those aren't "held modifiers", so strip them before deciding —
+        // otherwise the arrow keys we handle below (candidate cycling) would be
+        // misread as ⌘/⌃/⌥ chords and pass straight through.
+        let flags = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.function, .numericPad])
         let hasModifier = !flags.isEmpty && flags != .capsLock
 
         // Let modified keystrokes (⌘, ⌃, ⌥) pass through.
@@ -145,6 +151,18 @@ final class DSInputController: IMKInputController {
 
         case 0x35: // Escape (kVK_Escape)
             return handleEscape(client: sender)
+
+        case 0x7E: // Up arrow (kVK_UpArrow): previous candidate
+            if isShowingConversion { return handleCandidate(direction: -1, client: sender) }
+            return commitAndPassThrough(event: event, client: sender)
+
+        case 0x7D: // Down arrow (kVK_DownArrow): next / regenerated candidate
+            if isShowingConversion { return handleCandidate(direction: 1, client: sender) }
+            return commitAndPassThrough(event: event, client: sender)
+
+        case 0x30: // Tab (kVK_Tab): next / regenerated candidate (same as Down)
+            if isShowingConversion { return handleCandidate(direction: 1, client: sender) }
+            return commitAndPassThrough(event: event, client: sender)
 
         default:
             if let scalar = chars.unicodeScalars.first {
@@ -259,6 +277,41 @@ final class DSInputController: IMKInputController {
             showPreEdit(pinyinBuffer, client: sender) // raw pinyin with boundary
         }
         scheduleDebounce(client: sender)
+        return true
+    }
+
+    /// True while the pre-edit shows a converted sentence (not the raw pinyin),
+    /// i.e. there is a candidate to cycle through with up/down.
+    private var isShowingConversion: Bool {
+        if let t = preEditText, !t.isEmpty, t != pinyinBuffer { return true }
+        return false
+    }
+
+    /// Up/down cycle through alternative LLM conversions of the current input.
+    /// The remote result always wins over the local n-gram guess, so this only
+    /// ever moves between LLM candidates. A cached candidate shows instantly;
+    /// going down past the last one asks the core to regenerate a different one;
+    /// going up past the primary is a no-op (but consumes the key).
+    private func handleCandidate(direction: Int32, client sender: Any!) -> Bool {
+        guard let s = session else { return false }
+
+        if let c = ds_session_candidate_cached(s, direction) {
+            let alt = String(cString: c)
+            ds_string_free(c)
+            if !alt.isEmpty {
+                showPreEdit(alt, client: sender)
+                return true
+            }
+        }
+        // Nothing cached in that direction. Down → fetch a fresh alternative;
+        // the streaming callback updates the pre-edit when it lands. Up → done.
+        if direction > 0 {
+            let retained = Unmanaged.passRetained(self).toOpaque()
+            let rid = ds_session_regenerate(s, convertStreamCallback, retained)
+            if rid == 0 {
+                _ = Unmanaged<DSInputController>.fromOpaque(retained).takeRetainedValue()
+            }
+        }
         return true
     }
 

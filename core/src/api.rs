@@ -96,11 +96,68 @@ struct ApiErrorBody {
     message: String,
 }
 
+/// When regenerating an alternative, instruct the model to avoid the conversions
+/// the user has already rejected (`exclude`). Returns `None` for the normal path
+/// (no exclusions) so the primary prompt stays untouched.
+fn regen_instruction(exclude: &[String]) -> Option<String> {
+    if exclude.is_empty() {
+        return None;
+    }
+    let shown = exclude
+        .iter()
+        .map(|c| format!("- {c}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(format!(
+        "These conversions of the same input were already shown and rejected:\n{shown}\n\
+         Provide a DIFFERENT, equally natural whole-sentence conversion. It must not \
+         equal any rejected one. Output only the alternative, no explanation."
+    ))
+}
+
+/// System prompt + user pinyin, plus an optional regeneration instruction.
+fn build_messages<'a>(
+    cfg: &'a Config,
+    pinyin: &'a str,
+    regen: &'a Option<String>,
+) -> Vec<ChatMessage<'a>> {
+    let mut messages = vec![
+        ChatMessage {
+            role: "system",
+            content: &cfg.system_prompt,
+        },
+        ChatMessage {
+            role: "user",
+            content: pinyin,
+        },
+    ];
+    if let Some(instr) = regen {
+        messages.push(ChatMessage {
+            role: "system",
+            content: instr,
+        });
+    }
+    messages
+}
+
+/// Bump temperature when regenerating so the alternative actually differs;
+/// the normal path keeps the configured (lower) temperature.
+fn effective_temperature(cfg: &Config, exclude: &[String]) -> f32 {
+    if exclude.is_empty() {
+        cfg.temperature
+    } else {
+        cfg.temperature.max(0.8)
+    }
+}
+
 /// Send one conversion request. `client` is a shared, connection-pooled client.
+/// `exclude` lists already-shown conversions to avoid (empty for the normal path;
+/// non-empty when regenerating an alternative).
 pub async fn convert(
     client: &reqwest::Client,
     cfg: &Config,
     pinyin: &str,
+    exclude: &[String],
 ) -> Result<String, ConvertError> {
     if cfg.api_key.trim().is_empty() {
         return Err(ConvertError::Config(
@@ -109,19 +166,11 @@ pub async fn convert(
     }
 
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let regen = regen_instruction(exclude);
     let body = ChatRequest {
         model: &cfg.model,
-        messages: vec![
-            ChatMessage {
-                role: "system",
-                content: &cfg.system_prompt,
-            },
-            ChatMessage {
-                role: "user",
-                content: pinyin,
-            },
-        ],
-        temperature: cfg.temperature,
+        messages: build_messages(cfg, pinyin, &regen),
+        temperature: effective_temperature(cfg, exclude),
         max_tokens: cfg.max_tokens,
         stream: false,
     };
@@ -174,6 +223,7 @@ pub async fn convert_stream<F>(
     client: &reqwest::Client,
     cfg: &Config,
     pinyin: &str,
+    exclude: &[String],
     mut on_delta: F,
 ) -> Result<String, ConvertError>
 where
@@ -186,19 +236,11 @@ where
     }
 
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let regen = regen_instruction(exclude);
     let body = ChatRequest {
         model: &cfg.model,
-        messages: vec![
-            ChatMessage {
-                role: "system",
-                content: &cfg.system_prompt,
-            },
-            ChatMessage {
-                role: "user",
-                content: pinyin,
-            },
-        ],
-        temperature: cfg.temperature,
+        messages: build_messages(cfg, pinyin, &regen),
+        temperature: effective_temperature(cfg, exclude),
         max_tokens: cfg.max_tokens,
         stream: true,
     };

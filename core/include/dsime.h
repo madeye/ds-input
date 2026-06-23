@@ -146,6 +146,30 @@ uint64_t   ds_session_convert_stream(DsSession *session,
                                      DsStreamCallback callback,
                                      void *user_data);
 
+/* ---- Candidate cycling (up/down) ---------------------------------------- */
+/* The remote (LLM) conversion is always authoritative — it supersedes the local
+ * n-gram speculation. After it lands, the user can cycle through alternative LLM
+ * conversions of the SAME input with up/down. */
+
+/* Move to another already-fetched candidate for the current buffer and return it
+ * (caller frees, never NULL). direction > 0 -> NEXT candidate; direction < 0 ->
+ * PREVIOUS. Returns "" when there is none in that direction: up past the primary
+ * conversion, or down past the last cached candidate — in the down case the
+ * frontend should then call ds_session_regenerate to fetch a fresh one.
+ * Synchronous and cheap (consults only the cache, never the network). The set is
+ * replaced whenever a new conversion completes for changed input. */
+char      *ds_session_candidate_cached(DsSession *session, int32_t direction);
+
+/* Ask the provider for a DIFFERENT conversion of the current buffer, avoiding
+ * every candidate already shown, and append it so ds_session_candidate_cached can
+ * revisit it. Same streaming callback contract and supersession semantics as
+ * ds_session_convert_stream; returns a request id, or 0 if the buffer is empty.
+ * Call this when the user asks for another candidate (down) and the cache is
+ * exhausted. */
+uint64_t   ds_session_regenerate(DsSession *session,
+                                 DsStreamCallback callback,
+                                 void *user_data);
+
 /* Cancel any in-flight request (its callback fires with DS_ERR_CANCELLED). */
 void       ds_session_cancel(DsSession *session);
 
