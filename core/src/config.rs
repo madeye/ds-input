@@ -58,6 +58,12 @@ fn default_stream() -> bool {
 fn default_max_context_tokens() -> u32 {
     1000
 }
+fn default_speculative() -> bool {
+    true
+}
+fn default_ngram_order() -> usize {
+    crate::ngram::DEFAULT_ORDER
+}
 
 /// The full, serializable user configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +102,18 @@ pub struct Config {
     /// request stays small and cache-friendly. See `Session::context_full`.
     #[serde(default = "default_max_context_tokens")]
     pub max_context_tokens: u32,
+    /// Enable the local n-gram speculative pre-edit: an instant best-guess
+    /// conversion shown while the remote request is in flight, learned from the
+    /// conversions the provider has already returned. The remote result always
+    /// supersedes the guess; this only lowers *perceived* latency. When false,
+    /// no local model is consulted or trained.
+    #[serde(default = "default_speculative")]
+    pub speculative: bool,
+    /// Context order of the speculative n-gram model (1 = unigram, 2 = bigram).
+    /// Only used when first creating the on-disk model; an existing model keeps
+    /// the order it was built with. Clamped to `>= 1`.
+    #[serde(default = "default_ngram_order")]
+    pub ngram_order: usize,
 }
 
 impl Default for Config {
@@ -111,6 +129,8 @@ impl Default for Config {
             debounce_ms: default_debounce_ms(),
             stream: default_stream(),
             max_context_tokens: default_max_context_tokens(),
+            speculative: default_speculative(),
+            ngram_order: default_ngram_order(),
         }
     }
 }

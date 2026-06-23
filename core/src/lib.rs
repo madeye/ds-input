@@ -5,6 +5,9 @@
 mod api;
 mod config;
 mod engine;
+// Public so the `bake_seed` example can train + serialize the embedded baseline
+// with the same logic the engine uses at runtime (single source of truth).
+pub mod ngram;
 
 pub use engine::{Engine, Session};
 use std::cell::RefCell;
@@ -193,6 +196,46 @@ pub unsafe extern "C" fn ds_session_get_input(session: *mut Session) -> *mut c_c
         Some(s) => to_c_string(s.get_input()),
         None => to_c_string(""),
     }
+}
+
+/// Instant local *speculative* conversion of the current buffer (caller frees).
+/// Returns the local n-gram model's best guess to paint immediately while the
+/// async `ds_session_convert[_stream]` request is in flight, or an empty string
+/// when speculation is disabled or the model can't cover the input. Never NULL.
+///
+/// # Safety
+/// `session` is a valid pointer from `ds_session_new`.
+#[no_mangle]
+pub unsafe extern "C" fn ds_session_speculate(session: *mut Session) -> *mut c_char {
+    match session_ref(session) {
+        Some(s) => to_c_string(s.speculate().unwrap_or_default()),
+        None => to_c_string(""),
+    }
+}
+
+/// Teach the local speculative model that `pinyin_ascii` converts to `hanzi_utf8`
+/// (e.g. from text the user just committed), so future input can be guessed
+/// locally. No-op when speculation is disabled or the pair does not align.
+/// Returns DS_OK, or DS_ERR_CONFIG if the arguments are NULL/invalid UTF-8.
+///
+/// # Safety
+/// `engine` is valid; `pinyin_ascii` and `hanzi_utf8` are valid NUL-terminated
+/// UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn ds_engine_learn(
+    engine: *mut Engine,
+    pinyin_ascii: *const c_char,
+    hanzi_utf8: *const c_char,
+) -> i32 {
+    let Some(e) = engine_ref(engine) else {
+        return 5; // DS_ERR_CONFIG
+    };
+    let (Some(pinyin), Some(hanzi)) = (cstr(pinyin_ascii), cstr(hanzi_utf8)) else {
+        set_last_error("pinyin or hanzi is NULL or not UTF-8");
+        return 5;
+    };
+    e.learn(pinyin, hanzi);
+    0
 }
 
 /// Callback type matching `DsConvertCallback` in dsime.h.
