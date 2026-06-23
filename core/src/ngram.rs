@@ -28,11 +28,13 @@ use std::path::Path;
 /// off to the per-syllable unigram).
 pub const DEFAULT_ORDER: usize = 2;
 
-/// A hand-curated, high-frequency pinyin→Chinese corpus embedded into the binary
-/// so the model ships *pretrained* — speculation works on first launch, before
-/// the user has converted anything. See the file header for its format. The
-/// user's own conversions are then learned on top of this base.
-pub const SEED_CORPUS: &str = include_str!("../data/seed_corpus.tsv");
+/// The pretrained baseline, baked from a hand-curated high-frequency corpus into
+/// the compact `DSN1` binary (see [`NgramModel::to_seed_bytes`]) and embedded so
+/// the model ships *pretrained* — speculation works on first launch, before the
+/// user has converted anything. Decoded once, with no parsing or training; the
+/// user's own conversions are then learned on top of this base. Regenerate with
+/// `cargo run --example bake_seed` (see `data/gen_corpus.py` for the pipeline).
+const SEED_MODEL: &[u8] = include_bytes!("../data/seed_model.bin");
 
 /// Separates the left-context characters from the current syllable inside a
 /// context key. `\u{1}` (Start-of-Heading) never occurs in pinyin or Han text.
@@ -70,12 +72,13 @@ impl NgramModel {
         }
     }
 
-    /// Build a model of `order` pretrained from the embedded [`SEED_CORPUS`], so
-    /// speculation is useful immediately on a fresh install.
+    /// The model pretrained from the embedded [`SEED_MODEL`] baseline, decoded in
+    /// a single linear pass so speculation is useful immediately on a fresh
+    /// install with no startup training. The baseline is a bigram
+    /// ([`DEFAULT_ORDER`]); `order` is only the fallback context order used in the
+    /// (practically impossible) event the embedded blob fails to decode.
     pub fn pretrained(order: usize) -> Self {
-        let mut model = NgramModel::with_order(order);
-        model.train_from_corpus(SEED_CORPUS);
-        model
+        NgramModel::from_seed_bytes(SEED_MODEL).unwrap_or_else(|| NgramModel::with_order(order))
     }
 
     /// True when nothing has been learned yet.
@@ -121,6 +124,66 @@ impl NgramModel {
             }
         }
         learned
+    }
+
+    /// Serialize the model to the compact binary seed format (magic `DSN1`):
+    ///
+    /// ```text
+    /// "DSN1" | order:u8 | n_keys:varint |
+    ///   ( key_len:varint key  n_entries:varint ( hanzi_len:varint hanzi count:varint )* )*
+    /// ```
+    ///
+    /// where `varint` is unsigned LEB128. Keys and per-key entries are emitted in
+    /// sorted order, so the output is byte-for-byte reproducible across builds.
+    /// Used by the `bake_seed` example to produce the embedded baseline.
+    pub fn to_seed_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"DSN1");
+        buf.push(self.order.min(u8::MAX as usize) as u8);
+        put_varint(&mut buf, self.counts.len() as u64);
+        let mut keys: Vec<&String> = self.counts.keys().collect();
+        keys.sort_unstable();
+        for k in keys {
+            put_str(&mut buf, k);
+            let dist = &self.counts[k];
+            put_varint(&mut buf, dist.len() as u64);
+            let mut entries: Vec<(&String, &u32)> = dist.iter().collect();
+            entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+            for (hanzi, count) in entries {
+                put_str(&mut buf, hanzi);
+                put_varint(&mut buf, *count as u64);
+            }
+        }
+        buf
+    }
+
+    /// Rebuild a model from the compact [`to_seed_bytes`](Self::to_seed_bytes)
+    /// format, or `None` if the bytes are truncated or carry the wrong magic.
+    /// Decode is a single linear pass — no segmentation or training.
+    pub fn from_seed_bytes(data: &[u8]) -> Option<Self> {
+        if data.get(0..4)? != b"DSN1" {
+            return None;
+        }
+        let mut p = 4;
+        let order = (*data.get(p)?) as usize;
+        p += 1;
+        let n_keys = get_varint(data, &mut p)? as usize;
+        let mut counts = HashMap::with_capacity(n_keys);
+        for _ in 0..n_keys {
+            let key = get_str(data, &mut p)?;
+            let n_entries = get_varint(data, &mut p)? as usize;
+            let mut dist = HashMap::with_capacity(n_entries);
+            for _ in 0..n_entries {
+                let hanzi = get_str(data, &mut p)?;
+                let count = get_varint(data, &mut p)? as u32;
+                dist.insert(hanzi, count);
+            }
+            counts.insert(key, dist);
+        }
+        Some(NgramModel {
+            order: order.max(1),
+            counts,
+        })
     }
 
     /// Load a model from `path`, or fall back to a [`pretrained`](Self::pretrained)
@@ -252,6 +315,53 @@ fn split_han(s: &str) -> Vec<&str> {
         idx = next;
     }
     out
+}
+
+// ---- Compact binary codec (see `NgramModel::to_seed_bytes`) -----------------
+//
+// Counts and lengths are almost all tiny (single-char hanzi, short keys, small
+// counts), so every integer is an unsigned LEB128 varint: one byte for values
+// below 128. That keeps the baked baseline well under the plain-text corpus.
+
+fn put_varint(buf: &mut Vec<u8>, mut v: u64) {
+    loop {
+        let byte = (v & 0x7f) as u8;
+        v >>= 7;
+        if v == 0 {
+            buf.push(byte);
+            return;
+        }
+        buf.push(byte | 0x80);
+    }
+}
+
+fn put_str(buf: &mut Vec<u8>, s: &str) {
+    put_varint(buf, s.len() as u64);
+    buf.extend_from_slice(s.as_bytes());
+}
+
+fn get_varint(data: &[u8], p: &mut usize) -> Option<u64> {
+    let mut v = 0u64;
+    let mut shift = 0;
+    loop {
+        let byte = *data.get(*p)?;
+        *p += 1;
+        v |= ((byte & 0x7f) as u64) << shift;
+        if byte & 0x80 == 0 {
+            return Some(v);
+        }
+        shift += 7;
+        if shift >= 64 {
+            return None; // malformed: overlong varint
+        }
+    }
+}
+
+fn get_str(data: &[u8], p: &mut usize) -> Option<String> {
+    let len = get_varint(data, p)? as usize;
+    let bytes = data.get(*p..p.checked_add(len)?)?;
+    *p += len;
+    std::str::from_utf8(bytes).ok().map(str::to_string)
 }
 
 // ---- Pinyin segmentation ---------------------------------------------------
@@ -390,6 +500,25 @@ mod tests {
         assert_eq!(m.predict("nihao").as_deref(), Some("你好"));
         // Generalizes to a subset/reordering of seen syllables.
         assert_eq!(m.predict("hao").as_deref(), Some("好"));
+    }
+
+    #[test]
+    fn seed_bytes_round_trip_preserves_counts_and_predictions() {
+        let mut m = NgramModel::with_order(2);
+        for _ in 0..3 {
+            m.learn("shijian", "时间");
+        }
+        m.learn("nihaoshijie", "你好世界");
+
+        let bytes = m.to_seed_bytes();
+        let back = NgramModel::from_seed_bytes(&bytes).expect("valid DSN1 blob");
+        assert_eq!(back.order, m.order);
+        assert_eq!(back.counts, m.counts);
+        assert_eq!(back.predict("nihaoshijie").as_deref(), Some("你好世界"));
+
+        // Wrong magic / truncation decode to None, never a panic.
+        assert!(NgramModel::from_seed_bytes(b"XXXX").is_none());
+        assert!(NgramModel::from_seed_bytes(&bytes[..bytes.len() - 1]).is_none());
     }
 
     #[test]

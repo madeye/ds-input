@@ -5,7 +5,9 @@
 mod api;
 mod config;
 mod engine;
-mod ngram;
+// Public so the `bake_seed` example can train + serialize the embedded baseline
+// with the same logic the engine uses at runtime (single source of truth).
+pub mod ngram;
 
 pub use engine::{Engine, Session};
 use std::cell::RefCell;
