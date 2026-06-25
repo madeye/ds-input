@@ -41,8 +41,15 @@ impl ConvertError {
 struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ChatMessage<'a>>,
-    temperature: f32,
-    max_tokens: u32,
+    /// gpt-5 / o-series reject any non-default temperature, so we omit it for them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    /// Classic OpenAI-compatible token cap (DeepSeek et al.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    /// gpt-5 / o-series replacement for `max_tokens`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
     stream: bool,
 }
 
@@ -150,6 +157,41 @@ fn effective_temperature(cfg: &Config, exclude: &[String]) -> f32 {
     }
 }
 
+/// OpenAI's gpt-5 and o-series (reasoning) models diverge from the classic
+/// chat-completions schema: they reject `max_tokens` (require
+/// `max_completion_tokens`) and reject any non-default `temperature`. Other
+/// OpenAI-compatible providers (DeepSeek, etc.) still use the classic schema, so
+/// we only switch for models whose id marks them as one of these families.
+fn is_restricted_openai_model(model: &str) -> bool {
+    let m = model.trim().to_ascii_lowercase();
+    // Match family prefixes so future point releases (gpt-5.5, o3-mini, …) are
+    // covered. A trailing boundary check avoids matching unrelated ids like
+    // "o1ololo-custom" only when the prefix is the whole token start.
+    const FAMILIES: &[&str] = &["gpt-5", "gpt-6", "o1", "o3", "o4"];
+    FAMILIES.iter().any(|fam| {
+        m == *fam
+            || m.strip_prefix(fam)
+                .is_some_and(|rest| rest.starts_with(['-', '.']))
+    })
+}
+
+/// Build the (temperature, max_tokens, max_completion_tokens) triple for a
+/// request, selecting the right token-cap field and dropping temperature for
+/// restricted OpenAI models.
+fn token_params(cfg: &Config, exclude: &[String]) -> (Option<f32>, Option<u32>, Option<u32>) {
+    if is_restricted_openai_model(&cfg.model) {
+        // These models only accept the default temperature (1); sending the
+        // configured (lower) value errors, so omit it entirely.
+        (None, None, Some(cfg.max_tokens))
+    } else {
+        (
+            Some(effective_temperature(cfg, exclude)),
+            Some(cfg.max_tokens),
+            None,
+        )
+    }
+}
+
 /// Send one conversion request. `client` is a shared, connection-pooled client.
 /// `exclude` lists already-shown conversions to avoid (empty for the normal path;
 /// non-empty when regenerating an alternative).
@@ -167,11 +209,13 @@ pub async fn convert(
 
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
     let regen = regen_instruction(exclude);
+    let (temperature, max_tokens, max_completion_tokens) = token_params(cfg, exclude);
     let body = ChatRequest {
         model: &cfg.model,
         messages: build_messages(cfg, pinyin, &regen),
-        temperature: effective_temperature(cfg, exclude),
-        max_tokens: cfg.max_tokens,
+        temperature,
+        max_tokens,
+        max_completion_tokens,
         stream: false,
     };
 
@@ -237,11 +281,13 @@ where
 
     let url = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
     let regen = regen_instruction(exclude);
+    let (temperature, max_tokens, max_completion_tokens) = token_params(cfg, exclude);
     let body = ChatRequest {
         model: &cfg.model,
         messages: build_messages(cfg, pinyin, &regen),
-        temperature: effective_temperature(cfg, exclude),
-        max_tokens: cfg.max_tokens,
+        temperature,
+        max_tokens,
+        max_completion_tokens,
         stream: true,
     };
 
@@ -342,5 +388,79 @@ mod tests {
         assert_eq!(ConvertError::Api(String::new()).status_code(), 3);
         assert_eq!(ConvertError::Cancelled.status_code(), 4);
         assert_eq!(ConvertError::Config(String::new()).status_code(), 5);
+    }
+
+    #[test]
+    fn restricted_openai_models_detected() {
+        for m in [
+            "gpt-5",
+            "gpt-5.5",
+            "gpt-5-mini",
+            "GPT-5",
+            "o1",
+            "o1-mini",
+            "o3",
+            "o3-mini",
+            "o4-mini",
+            "gpt-6",
+        ] {
+            assert!(is_restricted_openai_model(m), "{m} should be restricted");
+        }
+        for m in [
+            "deepseek-v4-flash",
+            "deepseek-chat",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4.1",
+            "o1ololo", // not a real o1 release; must not match
+            "",
+        ] {
+            assert!(!is_restricted_openai_model(m), "{m} should be classic");
+        }
+    }
+
+    #[test]
+    fn token_params_pick_field_per_model() {
+        let base = Config {
+            max_tokens: 256,
+            temperature: 0.3,
+            ..Config::default()
+        };
+
+        // Classic provider: temperature + max_tokens, no max_completion_tokens.
+        let cfg = Config {
+            model: "deepseek-v4-flash".to_string(),
+            ..base.clone()
+        };
+        let (temp, max_tok, max_comp) = token_params(&cfg, &[]);
+        assert_eq!(temp, Some(0.3));
+        assert_eq!(max_tok, Some(256));
+        assert_eq!(max_comp, None);
+
+        // Restricted OpenAI: max_completion_tokens, no temperature/max_tokens.
+        let cfg = Config {
+            model: "gpt-5.5".to_string(),
+            ..base
+        };
+        let (temp, max_tok, max_comp) = token_params(&cfg, &[]);
+        assert_eq!(temp, None);
+        assert_eq!(max_tok, None);
+        assert_eq!(max_comp, Some(256));
+    }
+
+    #[test]
+    fn restricted_request_serializes_without_temperature_or_max_tokens() {
+        let body = ChatRequest {
+            model: "gpt-5.5",
+            messages: vec![],
+            temperature: None,
+            max_tokens: None,
+            max_completion_tokens: Some(256),
+            stream: false,
+        };
+        let json = serde_json::to_string(&body).unwrap();
+        assert!(json.contains("max_completion_tokens"));
+        assert!(!json.contains("\"temperature\""));
+        assert!(!json.contains("\"max_tokens\""));
     }
 }
