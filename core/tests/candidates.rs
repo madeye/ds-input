@@ -21,7 +21,7 @@ static SERIAL: Mutex<()> = Mutex::new(());
 use dsime::{
     ds_engine_free, ds_engine_new, ds_engine_set_config_json, ds_session_candidate_cached,
     ds_session_convert, ds_session_free, ds_session_new, ds_session_regenerate,
-    ds_session_set_input, ds_string_free, Engine, Session,
+    ds_session_set_input, ds_string_free, EngineHandle, Session,
 };
 
 fn temp_config(tag: &str) -> std::path::PathBuf {
@@ -146,7 +146,7 @@ fn down_regenerates_and_up_down_revisit_cached_candidates() {
     let cpath = CString::new(cfg_path.to_string_lossy().as_bytes()).unwrap();
 
     unsafe {
-        let engine: *mut Engine = ds_engine_new(cpath.as_ptr());
+        let engine: *mut EngineHandle = ds_engine_new(cpath.as_ptr());
         assert!(!engine.is_null());
         // Non-streaming: one terminal callback per request.
         let cfg = format!(
